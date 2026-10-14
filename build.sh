@@ -6,17 +6,26 @@ set -e
 cd "$(dirname "$0")"
 
 echo "Building release binary..."
-swift build -c release
+ARCHS="--arch arm64 --arch x86_64"  # universal: Apple Silicon + Intel
+swift build -c release $ARCHS
+OUT=$(swift build -c release $ARCHS --show-bin-path)
 
 BUNDLE="Caffeinate.app"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-cp .build/release/CaffeinateApp "$BUNDLE/Contents/MacOS/Caffeinate"
+cp "$OUT/CaffeinateApp" "$BUNDLE/Contents/MacOS/Caffeinate"
 chmod +x "$BUNDLE/Contents/MacOS/Caffeinate"
 cp Info.plist "$BUNDLE/Contents/Info.plist"
 
+APPEX="$BUNDLE/Contents/PlugIns/CaffeinateWidget.appex"
+mkdir -p "$APPEX/Contents/MacOS"
+cp "$OUT/CaffeinateWidget" "$APPEX/Contents/MacOS/CaffeinateWidget"
+cp WidgetInfo.plist "$APPEX/Contents/Info.plist"
+
 echo "Code signing (ad-hoc)..."
-codesign --force --deep -s - "$BUNDLE"
+# Sign the widget first with its sandbox entitlements; --deep would strip them.
+codesign --force -s - --entitlements Widget.entitlements "$APPEX"
+codesign --force -s - "$BUNDLE"
 
 echo "Built $BUNDLE"
 

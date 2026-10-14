@@ -8,6 +8,10 @@ let package = Package(
         .executableTarget(
             name: "CaffeinateApp",
             path: "Sources/CaffeinateApp"
+        ),
+        .executableTarget(
+            name: "CaffeinateWidget",
+            path: "Sources/CaffeinateWidget"
         )
     ]
 )

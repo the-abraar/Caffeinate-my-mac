@@ -124,6 +124,12 @@ struct ContentView: View {
             Toggle("Shut down when finished", isOn: $shutdownAfter)
                 .toggleStyle(.switch)
                 .font(.subheadline)
+                .onChange(of: shutdownAfter) { on in
+                    guard on else { return }
+                    manager.requestShutdownPermission { granted in
+                        if !granted { shutdownAfter = false }
+                    }
+                }
 
             Button {
                 let total = hours * 3600 + minutes * 60

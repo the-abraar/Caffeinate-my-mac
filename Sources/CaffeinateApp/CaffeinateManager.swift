@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AppKit
+import WidgetKit
 
 final class CaffeinateManager: ObservableObject {
     @Published var isActive: Bool = false
@@ -51,6 +53,7 @@ final class CaffeinateManager: ObservableObject {
             process = p
             isActive = true
             startTimer()
+            publishState()
         } catch {
             lastSessionSummary = "Failed to start: \(error.localizedDescription)"
         }
@@ -72,6 +75,7 @@ final class CaffeinateManager: ObservableObject {
         }
         remainingSeconds = 0
         totalSeconds = 0
+        publishState()
     }
 
     private func startTimer() {
@@ -102,6 +106,7 @@ final class CaffeinateManager: ObservableObject {
         isActive = false
         process = nil
         remainingSeconds = 0
+        publishState()
 
         if wasManual {
             return
@@ -114,12 +119,47 @@ final class CaffeinateManager: ObservableObject {
         }
     }
 
+    /// Triggers the macOS Automation prompt for System Events now, so the shutdown
+    /// at the end of an unattended session never stops to ask.
+    func requestShutdownPermission(completion: @escaping (Bool) -> Void) {
+        DispatchQueue.global().async {
+            let granted = Self.runSystemEvents("get name")
+            DispatchQueue.main.async { completion(granted) }
+        }
+    }
+
     private func triggerShutdown() {
-        let script = "tell application \"System Events\" to shut down"
+        // Forced: quit every app first so none can cancel the shutdown (unsaved work is lost).
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular && app != .current {
+            app.forceTerminate()
+        }
+        if !Self.runSystemEvents("shut down") {
+            lastSessionSummary = "Shutdown failed: allow Caffeinate under Privacy & Security > Automation"
+        }
+    }
+
+    private static func runSystemEvents(_ command: String) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", script]
-        try? p.run()
+        p.arguments = ["-e", "tell application \"System Events\" to \(command)"]
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
+    }
+
+    /// Read by the sandboxed widget through a home-relative read-only entitlement (Widget.entitlements).
+    private static let stateURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Caffeinate/state.plist")
+
+    private func publishState() {
+        var state: [String: Any] = [:]
+        if isActive, let endDate {
+            state = ["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter]
+        }
+        try? FileManager.default.createDirectory(at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? (state as NSDictionary).write(to: Self.stateURL)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private static let timeFormatter: DateFormatter = {
