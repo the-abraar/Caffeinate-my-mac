@@ -2,18 +2,62 @@ import Foundation
 import Combine
 import AppKit
 import WidgetKit
+import ServiceManagement
 
 final class CaffeinateManager: ObservableObject {
+    /// What ends a session besides Stop. Non-timer sessions still stop at a hard cap.
+    enum Ending: String { case timer, agentsIdle, processExit }
+
+    static let commuteSeconds = 45 * 60
+    static let lidCap = 2 * 3600       // a lid-closed session never runs longer, whatever ends it
+    static let idleCap = 12 * 3600     // cap for agent/process sessions without lid mode
+    static let agentIdleLimit: TimeInterval = 5 * 60
+    static let batteryFloor = 15
+
     @Published var isActive: Bool = false
     @Published var remainingSeconds: Int = 0
     @Published var totalSeconds: Int = 0
     @Published var shutdownAfter: Bool = false
+    @Published var lidMode: Bool = false
+    @Published var ending: Ending = .timer
+    @Published var waitName: String?
     @Published var lastSessionSummary: String = "No session yet"
+    @Published var battery = PowerInfo.battery()
+    @Published var lidReady = false
+    @Published var lidBusy = false
+    @Published var screenLockImmediate: Bool?
+    @Published var onHotspot = false
+    @Published var agentsWorking = false
+    @Published var history = SessionHistory.load()
+    @Published var autoCommute = UserDefaults.standard.bool(forKey: "autoCommute") {
+        didSet {
+            UserDefaults.standard.set(autoCommute, forKey: "autoCommute")
+            updateAgentWatching()
+        }
+    }
+    @Published var ntfyTopic = UserDefaults.standard.string(forKey: "ntfyTopic") ?? "" {
+        didSet { UserDefaults.standard.set(ntfyTopic, forKey: "ntfyTopic") }
+    }
 
     private var process: Process?
     private var timer: Timer?
+    private var startDate = Date()
     private var endDate: Date?
-    private var manualStop: Bool = false
+    private var batteryAtStart: Int?
+    private var peakThermal = 0
+    private var offlineSeconds: TimeInterval = 0
+    private var offlineSince: Date?
+    private var lidWasClosed = false
+    private var ticks = 0
+    private var waitSource: DispatchSourceProcess?
+    private var armedThisConnection = false
+
+    private let agents = AgentWatcher()
+    private let network = NetworkWatcher()
+    private var powerObserver: PowerInfo.Observer?
+    private var thermalObserver: NSObjectProtocol?
+
+    private var lidDeadline: Date { startDate.addingTimeInterval(TimeInterval(Self.lidCap)) }
 
     var progress: Double {
         guard totalSeconds > 0 else { return 0 }
@@ -30,53 +74,251 @@ final class CaffeinateManager: ObservableObject {
         return String(format: "%02d:%02d", m, s)
     }
 
-    func start(durationSeconds: Int, shutdownAfter: Bool) {
-        stop(manual: true, quiet: true)
+    // MARK: Lifecycle
 
-        totalSeconds = durationSeconds
-        remainingSeconds = durationSeconds
-        endDate = Date().addingTimeInterval(TimeInterval(durationSeconds))
-        self.shutdownAfter = shutdownAfter
-        manualStop = false
-
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-        p.arguments = ["-d", "-i", "-m", "-s", "-t", "\(durationSeconds)"]
-        p.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.handleCompletion()
-            }
+    /// Runs once the single-instance lock is held, so a second copy can never touch lid state.
+    func launch() {
+        // A marker at launch means the last run died during a lid session.
+        if let marker = LidControl.readMarker() {
+            lastSessionSummary = LidControl.restore(marker)
+                ? "Restored lid sleep after an unexpected quit"
+                : "Couldn't restore lid sleep. Run: sudo pmset -a disablesleep 0"
         }
+        publishState()  // clears a crashed run's widget state
+        Notifier.requestPermission()
+        agents.onActivity = { [weak self] in self?.agentActivity() }
+        network.onChange = { [weak self] in self?.networkChanged() }
+        network.start()
+        powerObserver = PowerInfo.Observer { [weak self] in self?.powerChanged() }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.thermalChanged() }
+        refreshSetup()
+    }
 
-        do {
-            try p.run()
-            process = p
-            isActive = true
-            startTimer()
-            publishState()
-        } catch {
-            lastSessionSummary = "Failed to start: \(error.localizedDescription)"
+    /// Normal quit, logout or restart: never leave lid sleep disabled.
+    func quit() {
+        finish("Quit")
+    }
+
+    /// sudo and sysadminctl spawn processes, so check off the main thread.
+    func refreshSetup() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = LidControl.isReady()
+            let lock = PowerInfo.screenLockIsImmediate()
+            DispatchQueue.main.async {
+                self.lidReady = ready
+                self.screenLockImmediate = lock
+            }
         }
     }
 
-    func stop(manual: Bool = true, quiet: Bool = false) {
-        guard isActive || process != nil else { return }
-        manualStop = manual
+    // MARK: Sessions
+
+    func commute() {
+        start(seconds: Self.commuteSeconds, lid: true)
+    }
+
+    func start(seconds: Int, lid: Bool = false, shutdownAfter: Bool = false,
+               ending: Ending = .timer, waitPID: pid_t? = nil) {
+        // Refuse before touching the running session, so a bad request doesn't end it.
+        if let pid = waitPID, kill(pid, 0) != 0, errno != EPERM {
+            lastSessionSummary = "No running process \(pid)"
+            return
+        }
+        if lid, let problem = lidBlocker() {
+            lastSessionSummary = problem
+            return
+        }
+        var seconds = ending == .timer ? seconds : (lid ? Self.lidCap : Self.idleCap)
+        guard seconds > 0 else { return }
+        // Lid to lid keeps sleep disabled throughout: with the lid shut, a gap would sleep the Mac.
+        finish(nil, keepLid: lid)
+
+        startDate = Date()
+        if lid {
+            seconds = min(seconds, Self.lidCap)
+            // The failsafe's deadline sits a little past the app's own, so the app normally ends first.
+            guard LidControl.begin(until: lidDeadline.addingTimeInterval(120)) else {
+                lidReady = false
+                lastSessionSummary = "Lid mode failed: sudo refused. Set it up again in Settings."
+                return
+            }
+        }
+        guard spawnCaffeinate(seconds: seconds, lid: lid) else {
+            if lid { LidControl.end() }
+            return
+        }
+
+        totalSeconds = seconds
+        remainingSeconds = seconds
+        endDate = startDate.addingTimeInterval(TimeInterval(seconds))
+        self.shutdownAfter = shutdownAfter && !lid  // a forced shutdown would kill the agents
+        lidMode = lid
+        self.ending = ending
+        batteryAtStart = PowerInfo.battery()?.percent
+        peakThermal = ProcessInfo.processInfo.thermalState.rawValue
+        offlineSeconds = 0
+        offlineSince = network.isOnline ? nil : Date()
+        lidWasClosed = PowerInfo.isLidClosed()
+        ticks = 0
+        isActive = true
+        startTimer()
+        publishState()
+        updateAgentWatching()
+        if let pid = waitPID { watchExit(of: pid) }  // last: it may finish at once if the process is gone
+    }
+
+    func stop() {
+        finish("Stopped")
+    }
+
+    /// caffeinate can't extend `-t`, so a fresh one replaces it.
+    func extend(seconds: Int) {
+        guard isActive, ending == .timer, let endDate else { return }
+        var newEnd = endDate.addingTimeInterval(TimeInterval(seconds))
+        if lidMode { newEnd = min(newEnd, lidDeadline) }
+        guard newEnd > endDate else {
+            lastSessionSummary = "Lid sessions stop after \(Self.lidCap / 3600) h"
+            return
+        }
+        guard spawnCaffeinate(seconds: Int(ceil(newEnd.timeIntervalSinceNow)), lid: lidMode) else { return }
+        totalSeconds += Int(newEnd.timeIntervalSince(endDate))
+        self.endDate = newEnd
+        tick()
+        publishState()
+    }
+
+    func handle(_ url: URL) {
+        guard let command = URLCommand.parse(url) else {
+            lastSessionSummary = "Ignored URL: \(url.absoluteString)"
+            return
+        }
+        switch command {
+        case let .start(seconds, lid): start(seconds: seconds, lid: lid)
+        case .commute: commute()
+        case let .untilIdle(lid): start(seconds: 0, lid: lid, ending: .agentsIdle)
+        case let .whilePID(pid, lid): start(seconds: 0, lid: lid, ending: .processExit, waitPID: pid)
+        case let .extend(seconds): extend(seconds: seconds)
+        case .stop: stop()
+        }
+    }
+
+    /// Why lid mode can't start right now, or nil.
+    private func lidBlocker() -> String? {
+        if !lidReady { return "Set up lid mode first (Settings)" }
+        if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+            return "Mac is too hot for lid mode"
+        }
+        if let b = PowerInfo.battery(), b.onBattery, b.percent <= Self.batteryFloor {
+            return "Battery at \(b.percent)%: too low for lid mode"
+        }
+        return nil
+    }
+
+    /// Starts caffeinate for `seconds`, replacing the running one.
+    private func spawnCaffeinate(seconds: Int, lid: Bool) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        // -w: caffeinate exits with this app, so a crash leaves no assertion behind.
+        // No -d in lid mode: the screen is shut anyway, and display sleep is what locks it.
+        p.arguments = (lid ? [] : ["-d"]) + ["-i", "-m", "-s", "-t", "\(seconds)", "-w", "\(getpid())"]
+        p.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async { self?.caffeinateExited() }
+        }
+        do {
+            try p.run()
+        } catch {
+            lastSessionSummary = "Failed to start: \(error.localizedDescription)"
+            return false
+        }
+        if let old = process {
+            old.terminationHandler = nil
+            if old.isRunning { old.terminate() }
+        }
+        process = p
+        return true
+    }
+
+    private func caffeinateExited() {
+        let shutdown = shutdownAfter
+        finish(ending == .timer ? "Completed" : "Hit the \((lidMode ? Self.lidCap : Self.idleCap) / 3600) h cap",
+               notify: true)
+        if shutdown { triggerShutdown() }
+    }
+
+    private func watchExit(of pid: pid_t) {
+        waitName = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "process \(pid)"
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            self?.finish("\(self?.waitName ?? "Process") quit", notify: true)
+        }
+        source.resume()
+        waitSource = source
+        if kill(pid, 0) != 0, errno == ESRCH { finish("\(waitName ?? "Process") quit", notify: true) }
+    }
+
+    /// Ends the session: stops caffeinate, restores lid sleep, records it.
+    /// `reason` nil means a new session is replacing this one; `keepLid` leaves lid sleep
+    /// disabled (and the marker with the original values) for that new lid session.
+    private func finish(_ reason: String?, notify: Bool = false, keepLid: Bool = false) {
+        guard isActive else { return }
         timer?.invalidate()
         timer = nil
+        waitSource?.cancel()
+        waitSource = nil
         process?.terminationHandler = nil
         if let p = process, p.isRunning {
             p.terminate()
         }
         process = nil
-        isActive = false
-        if !quiet {
-            lastSessionSummary = "Stopped manually at \(Self.timeFormatter.string(from: Date()))"
+
+        var summary = reason.map { "\($0) at \(Self.clock())" }
+        if lidMode && !keepLid {
+            if !LidControl.end() {
+                summary = (summary ?? "") + ". Couldn't restore lid sleep, run: sudo pmset -a disablesleep 0"
+            }
+            if PowerInfo.isLidClosed() { scheduleSleepCheck() }
         }
+        if let since = offlineSince {
+            offlineSeconds += Date().timeIntervalSince(since)
+            offlineSince = nil
+        }
+        if let reason { record(reason) }
+
+        isActive = false
+        lidMode = false
+        ending = .timer
+        waitName = nil
         remainingSeconds = 0
         totalSeconds = 0
         publishState()
+        updateAgentWatching()
+        if let summary {
+            lastSessionSummary = summary
+            if notify { Notifier.send(summary, ntfyTopic: ntfyTopic) }
+        }
     }
+
+    /// Sleep comes back with the lid still shut. If the Mac is somehow still up a minute
+    /// later, ask it to sleep (pmset sleepnow needs no root).
+    private func scheduleSleepCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self, !isActive, PowerInfo.isLidClosed() else { return }
+            LidControl.run(LidControl.pmset, ["sleepnow"])
+        }
+    }
+
+    private func record(_ reason: String) {
+        let used = batteryAtStart.flatMap { start in PowerInfo.battery().map { start - $0.percent } }
+        let r = SessionRecord(
+            start: startDate, minutes: Int(Date().timeIntervalSince(startDate) / 60), lid: lidMode,
+            batteryUsed: used, peakThermal: peakThermal, offlineSeconds: Int(offlineSeconds), reason: reason)
+        history = Array(([r] + history).prefix(SessionHistory.limit))
+        SessionHistory.save(history)
+    }
+
+    // MARK: Ticks and safety
 
     private func startTimer() {
         timer?.invalidate()
@@ -90,34 +332,133 @@ final class CaffeinateManager: ObservableObject {
 
     private func tick() {
         guard let endDate else { return }
-        let remaining = Int(ceil(endDate.timeIntervalSinceNow))
-        remainingSeconds = max(0, remaining)
-        if remaining <= 0 {
-            timer?.invalidate()
-            timer = nil
+        remainingSeconds = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        if lidMode {
+            // Lock as the lid shuts: display sleep plus "require password immediately".
+            let closed = PowerInfo.isLidClosed()
+            if closed && !lidWasClosed { LidControl.run(LidControl.pmset, ["displaysleepnow"]) }
+            lidWasClosed = closed
         }
-    }
-
-    private func handleCompletion() {
-        timer?.invalidate()
-        timer = nil
-        let wasManual = manualStop
-        let didShutdown = shutdownAfter
-        isActive = false
-        process = nil
-        remainingSeconds = 0
-        publishState()
-
-        if wasManual {
+        if ending == .agentsIdle,
+           Date().timeIntervalSince(max(startDate, agents.lastActivity ?? startDate)) > Self.agentIdleLimit {
+            finish("Agents idle", notify: true)
             return
         }
-
-        lastSessionSummary = "Completed at \(Self.timeFormatter.string(from: Date()))"
-
-        if didShutdown {
-            triggerShutdown()
+        ticks += 1
+        if ticks % 30 == 0 {
+            powerChanged()
+            agentsWorking = agents.isWorking
+            // On the main thread on purpose: it must never race finish()'s restore.
+            if lidMode { LidControl.upkeep(force: false, until: lidDeadline.addingTimeInterval(120)) }
         }
     }
+
+    private func powerChanged() {
+        let b = PowerInfo.battery()
+        let sourceChanged = b?.onBattery != battery?.onBattery
+        battery = b
+        guard lidMode else { return }
+        if let b, b.onBattery, b.percent <= Self.batteryFloor {
+            finish("Stopped: battery at \(b.percent)%", notify: true)
+        } else if sourceChanged {
+            // Apple Silicon can drop closed-display mode when the charger is plugged or pulled.
+            LidControl.upkeep(force: true, until: lidDeadline.addingTimeInterval(120))
+        }
+    }
+
+    private func thermalChanged() {
+        let state = ProcessInfo.processInfo.thermalState
+        peakThermal = max(peakThermal, state.rawValue)
+        if lidMode, state.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+            finish("Stopped: Mac got too hot", notify: true)
+        }
+    }
+
+    // MARK: Agents and hotspot
+
+    private func agentActivity() {
+        agentsWorking = true
+        maybeAutoCommute()
+    }
+
+    private func networkChanged() {
+        let wasOnHotspot = onHotspot
+        onHotspot = network.onHotspot
+        if onHotspot && !wasOnHotspot { armedThisConnection = false }
+        if isActive {
+            if !network.isOnline, offlineSince == nil { offlineSince = Date() }
+            if network.isOnline, let since = offlineSince {
+                offlineSeconds += Date().timeIntervalSince(since)
+                offlineSince = nil
+            }
+        }
+        updateAgentWatching()
+        maybeAutoCommute()
+    }
+
+    /// Opt-in: on the hotspot with agents working, start lid mode while the lid is still open.
+    /// Once the lid shuts without it, the Mac is already asleep. Once per hotspot connection.
+    private func maybeAutoCommute() {
+        guard autoCommute, onHotspot, lidReady, !isActive, !armedThisConnection, agents.isWorking else { return }
+        armedThisConnection = true
+        start(seconds: 0, lid: true, ending: .agentsIdle)
+        if isActive {
+            Notifier.send("Commute mode on: agents are working on the hotspot. You can close the lid.",
+                          ntfyTopic: ntfyTopic)
+        }
+    }
+
+    private func updateAgentWatching() {
+        if (autoCommute && onHotspot) || (isActive && ending == .agentsIdle) {
+            agents.start()
+        } else {
+            agents.stop()
+        }
+        agentsWorking = agents.isWorking
+    }
+
+    // MARK: Lid setup
+
+    func setUpLid() {
+        lidBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let error = LidControl.install()
+            let ready = LidControl.isReady()
+            DispatchQueue.main.async {
+                self.lidBusy = false
+                self.lidReady = ready
+                self.lastSessionSummary = error ?? (ready ? "Lid mode is ready" : "Setup ran, but sudo still asks for a password")
+            }
+        }
+    }
+
+    func revokeLid() {
+        if lidMode { stop() }
+        lidBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let error = LidControl.revoke()
+            let ready = LidControl.isReady()
+            DispatchQueue.main.async {
+                self.lidBusy = false
+                self.lidReady = ready
+                self.lastSessionSummary = error ?? "Lid mode access removed"
+            }
+        }
+    }
+
+    var launchAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            objectWillChange.send()
+            do {
+                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                lastSessionSummary = "Launch at login: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: Shutdown
 
     /// Triggers the macOS Automation prompt for System Events now, so the shutdown
     /// at the end of an unattended session never stops to ask.
@@ -148,19 +489,25 @@ final class CaffeinateManager: ObservableObject {
         return p.terminationStatus == 0
     }
 
-    /// Read by the sandboxed widget through a home-relative read-only entitlement (Widget.entitlements).
+    // MARK: Widget and CLI state
+
+    /// Read by the sandboxed widget through a home-relative read-only entitlement (Widget.entitlements),
+    /// and by `caffeinate-my-mac status`.
     private static let stateURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Caffeinate/state.plist")
 
     private func publishState() {
         var state: [String: Any] = [:]
         if isActive, let endDate {
-            state = ["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter]
+            state = ["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter,
+                     "lid": lidMode, "ending": ending.rawValue]
         }
         try? FileManager.default.createDirectory(at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? (state as NSDictionary).write(to: Self.stateURL)
         WidgetCenter.shared.reloadAllTimelines()
     }
+
+    private static func clock() -> String { timeFormatter.string(from: Date()) }
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()

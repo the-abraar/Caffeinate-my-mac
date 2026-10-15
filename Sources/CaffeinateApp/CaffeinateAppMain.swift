@@ -1,8 +1,25 @@
 import SwiftUI
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let manager = CaffeinateManager()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        manager.launch()
+    }
+
+    /// caffeinate-my-mac:// URLs from the CLI, Shortcuts or agents.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(manager.handle)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        manager.quit()
+    }
+}
+
 @main
 struct CaffeinateAppMain: App {
-    @StateObject private var manager = CaffeinateManager()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var app
 
     init() {
         // Single instance: a second copy would run its own caffeinate + timer.
@@ -13,16 +30,26 @@ struct CaffeinateAppMain: App {
 
     var body: some Scene {
         MenuBarExtra {
-            ContentView(manager: manager)
+            ContentView(manager: app.manager)
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: manager.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
-                if manager.isActive {
-                    Text(manager.remainingText)
-                        .monospacedDigit()
-                }
-            }
+            MenuBarLabel(manager: app.manager)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+struct MenuBarLabel: View {
+    @ObservedObject var manager: CaffeinateManager
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: manager.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
+            if manager.isActive {
+                Text(manager.lidMode && manager.battery != nil
+                     ? "\(manager.remainingText) · \(manager.battery?.percent ?? 0)%"
+                     : manager.remainingText)
+                    .monospacedDigit()
+            }
+        }
     }
 }

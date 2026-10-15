@@ -3,8 +3,20 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var manager: CaffeinateManager
 
+    enum Ends: String, CaseIterable, Identifiable {
+        case timer = "After a timer"
+        case time = "At a time"
+        case agents = "When agents go idle"
+        case app = "When an app quits"
+        var id: Self { self }
+    }
+
     @State private var hours: Int = 2
     @State private var minutes: Int = 0
+    @State private var ends: Ends = .timer
+    @State private var untilTime = Date().addingTimeInterval(3600)
+    @State private var appPID: pid_t = 0
+    @State private var lid: Bool = false
     @State private var shutdownAfter: Bool = false
 
     private let presets: [(String, Int)] = [
@@ -15,7 +27,7 @@ struct ContentView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             header
 
             statusCard
@@ -26,15 +38,21 @@ struct ContentView: View {
 
             Divider()
 
+            settings
+
+            if !manager.history.isEmpty {
+                historySection
+            }
+
             Text(manager.lastSessionSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Spacer()
                 Button("Quit") {
-                    manager.stop(manual: true, quiet: true)
-                    NSApplication.shared.terminate(nil)
+                    NSApplication.shared.terminate(nil)  // the app delegate ends the session
                 }
                 .buttonStyle(.plain)
                 .font(.caption)
@@ -42,7 +60,7 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: 320)
     }
 
     private var header: some View {
@@ -53,6 +71,11 @@ struct ContentView: View {
             Text("Caffeinate")
                 .font(.title3.bold())
             Spacer()
+            if manager.onHotspot {
+                Label("Hotspot", systemImage: "personalhotspot")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -63,6 +86,11 @@ struct ContentView: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(manager.isActive ? .green : .secondary)
                 Spacer()
+                if manager.isActive && manager.lidMode {
+                    Label("Lid can close", systemImage: "laptopcomputer")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
                 if manager.isActive && manager.shutdownAfter {
                     Label("Shutdown queued", systemImage: "power")
                         .font(.caption2)
@@ -77,14 +105,23 @@ struct ContentView: View {
             if manager.isActive {
                 ProgressView(value: manager.progress)
                     .tint(.orange)
-            }
 
-            if manager.isActive {
-                Button(role: .destructive) {
-                    manager.stop(manual: true)
-                } label: {
-                    Text("Stop")
-                        .frame(maxWidth: .infinity)
+                if let detail = sessionDetail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button(role: .destructive) {
+                        manager.stop()
+                    } label: {
+                        Text("Stop")
+                            .frame(maxWidth: .infinity)
+                    }
+                    if manager.ending == .timer {
+                        Button("+15m") { manager.extend(seconds: 15 * 60) }
+                    }
                 }
                 .buttonStyle(.bordered)
             }
@@ -93,54 +130,217 @@ struct ContentView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.gray.opacity(0.12)))
     }
 
+    private var sessionDetail: String? {
+        var parts: [String] = []
+        switch manager.ending {
+        case .timer: break
+        case .agentsIdle: parts.append(manager.agentsWorking ? "Ends when agents go idle (working now)" : "Ends when agents go idle")
+        case .processExit: parts.append("Ends when \(manager.waitName ?? "the app") quits")
+        }
+        if manager.ending != .timer { parts.append("the timer is the hard cap") }
+        if manager.lidMode, let b = manager.battery { parts.append("battery \(b.percent)%") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     private var configSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Duration")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                Stepper(value: $hours, in: 0...24) {
-                    Text("\(hours) h")
-                        .monospacedDigit()
+            if manager.lidReady {
+                Button {
+                    manager.commute()
+                } label: {
+                    Label("Commute: 45 min, lid closed", systemImage: "figure.walk")
+                        .frame(maxWidth: .infinity)
                 }
-                Stepper(value: $minutes, in: 0...59, step: 5) {
-                    Text("\(minutes) m")
-                        .monospacedDigit()
-                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
             }
 
-            HStack(spacing: 6) {
-                ForEach(presets, id: \.0) { preset in
-                    Button(preset.0) {
-                        hours = preset.1 / 3600
-                        minutes = (preset.1 % 3600) / 60
+            Picker("Ends", selection: $ends) {
+                ForEach(Ends.allCases) { Text($0.rawValue).tag($0) }
+            }
+
+            switch ends {
+            case .timer:
+                HStack(spacing: 12) {
+                    Stepper(value: $hours, in: 0...24) {
+                        Text("\(hours) h")
+                            .monospacedDigit()
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    Stepper(value: $minutes, in: 0...59, step: 5) {
+                        Text("\(minutes) m")
+                            .monospacedDigit()
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    ForEach(presets, id: \.0) { preset in
+                        Button(preset.0) {
+                            hours = preset.1 / 3600
+                            minutes = (preset.1 % 3600) / 60
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            case .time:
+                DatePicker("Until", selection: $untilTime, displayedComponents: .hourAndMinute)
+            case .agents:
+                Text("Ends 5 min after Claude Code and Codex stop working. Stops after 2 h with the lid closed, 12 h otherwise.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .app:
+                Picker("App", selection: $appPID) {
+                    Text("Choose…").tag(pid_t(0))
+                    ForEach(runningApps, id: \.processIdentifier) { app in
+                        Text(app.localizedName ?? "pid \(app.processIdentifier)").tag(app.processIdentifier)
+                    }
                 }
             }
 
-            Toggle("Shut down when finished", isOn: $shutdownAfter)
+            Toggle("Keep awake with lid closed", isOn: $lid)
                 .toggleStyle(.switch)
                 .font(.subheadline)
-                .onChange(of: shutdownAfter) { on in
-                    guard on else { return }
-                    manager.requestShutdownPermission { granted in
-                        if !granted { shutdownAfter = false }
+                .disabled(!manager.lidReady)
+            if !manager.lidReady {
+                Text("Set up lid mode under Settings first.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if lid, let seconds = plannedSeconds, seconds > CaffeinateManager.lidCap {
+                Text("Lid sessions stop after 2 h.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !lid && (ends == .timer || ends == .time) {
+                Toggle("Shut down when finished", isOn: $shutdownAfter)
+                    .toggleStyle(.switch)
+                    .font(.subheadline)
+                    .onChange(of: shutdownAfter) { on in
+                        guard on else { return }
+                        manager.requestShutdownPermission { granted in
+                            if !granted { shutdownAfter = false }
+                        }
                     }
-                }
+            }
+
+            if let seconds = plannedSeconds, ends == .timer || ends == .time,
+               let battery = manager.battery,
+               let use = PowerInfo.estimatedUse(seconds: lid ? min(seconds, CaffeinateManager.lidCap) : seconds,
+                                                battery: battery) {
+                Text("≈ \(use)% battery at the current draw (\(battery.percent)% now)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             Button {
-                let total = hours * 3600 + minutes * 60
-                guard total > 0 else { return }
-                manager.start(durationSeconds: total, shutdownAfter: shutdownAfter)
+                startSession()
             } label: {
                 Text("Start")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(hours == 0 && minutes == 0)
+            .disabled(plannedSeconds == nil)
+        }
+    }
+
+    private var settings: some View {
+        DisclosureGroup("Settings") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(manager.lidReady ? "Lid mode ready" : "Lid mode needs setup", systemImage: "laptopcomputer")
+                        .font(.subheadline)
+                    Spacer()
+                    if manager.lidBusy {
+                        ProgressView().controlSize(.small)
+                    } else if manager.lidReady {
+                        Button("Revoke") { manager.revokeLid() }
+                    } else {
+                        Button("Set Up…") { manager.setUpLid() }
+                    }
+                }
+                if !manager.lidReady {
+                    Text("Asks for your password once. Caffeinate may then run only `pmset -a disablesleep 0/1` and `pmset -b lowpowermode 0/1`, plus a failsafe that restores sleep if the app dies.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if manager.screenLockImmediate == false {
+                    Text("⚠️ Set Lock Screen → “Require password after screen saver begins or display is turned off” to Immediately, so an opened lid shows the lock screen.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle("Auto commute on iPhone hotspot", isOn: $manager.autoCommute)
+                    .disabled(!manager.lidReady)
+                Text("On the hotspot with agents working, turns on lid mode until they go idle.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Launch at login", isOn: Binding(
+                    get: { manager.launchAtLogin },
+                    set: { manager.launchAtLogin = $0 }
+                ))
+
+                TextField("ntfy.sh topic for phone alerts", text: $manager.ntfyTopic)
+                    .textFieldStyle(.roundedBorder)
+                if !manager.ntfyTopic.isEmpty && !Notifier.isValidTopic(manager.ntfyTopic) {
+                    Text("Letters, digits, - and _ only")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.subheadline)
+    }
+
+    private var historySection: some View {
+        DisclosureGroup("Recent sessions") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(manager.history) { record in
+                        Text(record.line)
+                            .font(.caption2.monospacedDigit())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxHeight: 120)
+        }
+        .font(.subheadline)
+    }
+
+    private var runningApps: [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0 != .current }
+    }
+
+    /// Duration the chosen options would run for, or nil when Start should be disabled.
+    private var plannedSeconds: Int? {
+        switch ends {
+        case .timer:
+            let total = hours * 3600 + minutes * 60
+            return total > 0 ? total : nil
+        case .time:
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: untilTime)
+            return secondsUntil(hour: parts.hour ?? 0, minute: parts.minute ?? 0, from: Date())
+        case .agents:
+            return lid ? CaffeinateManager.lidCap : CaffeinateManager.idleCap
+        case .app:
+            return appPID > 0 ? (lid ? CaffeinateManager.lidCap : CaffeinateManager.idleCap) : nil
+        }
+    }
+
+    private func startSession() {
+        guard let seconds = plannedSeconds else { return }
+        switch ends {
+        case .timer, .time:
+            manager.start(seconds: seconds, lid: lid, shutdownAfter: !lid && shutdownAfter)
+        case .agents:
+            manager.start(seconds: 0, lid: lid, ending: .agentsIdle)
+        case .app:
+            manager.start(seconds: 0, lid: lid, ending: .processExit, waitPID: appPID)
         }
     }
 }

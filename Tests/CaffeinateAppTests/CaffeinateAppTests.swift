@@ -1,0 +1,254 @@
+import XCTest
+@testable import CaffeinateApp
+
+final class LidControlTests: XCTestCase {
+    func testSudoersRulePassesVisudo() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("sudoers-\(UUID().uuidString)")
+        try LidControl.sudoersContent(user: "blackbird").write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let r = LidControl.run("/usr/sbin/visudo", ["-c", "-f", file.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        let body = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertEqual(body.components(separatedBy: "NOPASSWD").count - 1, 4)
+        XCTAssertFalse(body.contains("*"))
+        XCTAssertFalse(LidControl.sudoersPath.split(separator: "/").last!.contains("."))
+    }
+
+    func testUsernameAllowlist() {
+        XCTAssertTrue(LidControl.isValidUsername("blackbird"))
+        XCTAssertTrue(LidControl.isValidUsername("first.last"))
+        XCTAssertFalse(LidControl.isValidUsername(""))
+        XCTAssertFalse(LidControl.isValidUsername("a b"))
+        XCTAssertFalse(LidControl.isValidUsername("x\nALL ALL=(ALL) NOPASSWD: ALL"))
+        XCTAssertFalse(LidControl.isValidUsername("-rf"))
+    }
+
+    func testParsePmset() {
+        let off = "System-wide power settings:\nCurrently in use:\n standby              1\n sleep                1\n"
+        let on = "System-wide power settings:\n SleepDisabled\t\t1\nCurrently in use:\n standby  1\n"
+        XCTAssertFalse(LidControl.parseSleepDisabled(off))
+        XCTAssertTrue(LidControl.parseSleepDisabled(on))
+
+        let custom = "Battery Power:\n lowpowermode         1\n sleep 1\nAC Power:\n lowpowermode         0\n"
+        XCTAssertEqual(LidControl.parseBatteryLowPowerMode(custom), true)
+        XCTAssertEqual(LidControl.parseBatteryLowPowerMode("AC Power:\n lowpowermode 1\n"), nil)
+    }
+
+    func testMarkerRoundTrip() {
+        let m = LidControl.Marker(prior: false, lowPowerPrior: false, pid: 4242, until: 1_800_000_000)
+        XCTAssertEqual(LidControl.Marker(text: m.text), m)
+        XCTAssertEqual(LidControl.Marker(text: "prior=1\npid=7\n"), LidControl.Marker(prior: true, pid: 7))
+        XCTAssertNil(LidControl.Marker(text: "prior=yes\npid=7\n"))
+        XCTAssertNil(LidControl.Marker(text: "prior=0\n"))
+    }
+}
+
+/// Runs Resources/failsafe.sh against a temp support dir and a fake sudo that logs its arguments.
+final class FailsafeScriptTests: XCTestCase {
+    private var dir: URL!
+    private var log: URL { dir.appendingPathComponent("sudo.log") }
+    private var marker: URL { dir.appendingPathComponent("lid-session") }
+    private let script = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Resources/failsafe.sh")
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("failsafe-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+
+    private func fakeSudo(exit code: Int) throws -> String {
+        let path = dir.appendingPathComponent("sudo").path
+        try "#!/bin/sh\necho \"$*\" >> '\(log.path)'\nexit \(code)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        chmod(path, 0o755)
+        return path
+    }
+
+    @discardableResult
+    private func runScript(sudoExit: Int = 0) throws -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = [script.path]
+        p.environment = ["HOME": dir.path, "CAFFEINATE_SUPPORT_DIR": dir.path, "CAFFEINATE_SUDO": try fakeSudo(exit: sudoExit)]
+        try p.run()
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+
+    private var calls: [String] {
+        ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    /// A live process whose executable is named Caffeinate.
+    private func fakeApp() throws -> Process {
+        let exe = dir.appendingPathComponent("Caffeinate")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: exe)
+        let p = Process()
+        p.executableURL = exe
+        p.arguments = ["30"]
+        try p.run()
+        return p
+    }
+
+    func testNoMarkerDoesNothing() throws {
+        XCTAssertEqual(try runScript(), 0)
+        XCTAssertEqual(calls, [])
+    }
+
+    func testDeadAppRestoresSleepAndLowPowerMode() throws {
+        try "prior=0\nlpm=0\npid=999999\n".write(to: marker, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try runScript(), 0)
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0", "-n /usr/bin/pmset -b lowpowermode 0"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    func testReusedPidOfAnotherProcessStillRestores() throws {
+        try "prior=1\npid=\(getpid())\n".write(to: marker, atomically: true, encoding: .utf8)
+        try runScript()
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 1"])
+    }
+
+    func testLiveAppBeforeDeadlineIsLeftAlone() throws {
+        let app = try fakeApp()
+        defer { app.terminate() }
+        let until = Int(Date().timeIntervalSince1970) + 600
+        try "prior=0\npid=\(app.processIdentifier)\nuntil=\(until)\n".write(to: marker, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try runScript(), 0)
+        XCTAssertEqual(calls, [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    func testLiveAppPastDeadlineIsTreatedAsHung() throws {
+        let app = try fakeApp()
+        defer { app.terminate() }
+        let until = Int(Date().timeIntervalSince1970) - 1
+        try "prior=0\npid=\(app.processIdentifier)\nuntil=\(until)\n".write(to: marker, atomically: true, encoding: .utf8)
+        try runScript()
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0"])
+    }
+
+    func testGarbagePriorRestoresNormalSleep() throws {
+        try "prior=;rm -rf /\npid=abc\n".write(to: marker, atomically: true, encoding: .utf8)
+        try runScript()
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0"])
+    }
+
+    func testSudoFailureKeepsMarkerForRetry() throws {
+        try "prior=0\npid=999999\n".write(to: marker, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try runScript(sudoExit: 1), 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+    }
+}
+
+final class CLITests: XCTestCase {
+    private let cli = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Resources/caffeinate-my-mac")
+
+    private func run(_ args: [String]) throws -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = [cli.path] + args
+        p.environment = ["CAFFEINATE_OPEN": "echo", "HOME": NSTemporaryDirectory()]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func testCommandsBuildURLs() throws {
+        XCTAssertEqual(try run(["for", "45m", "--lid"]).1, "caffeinate-my-mac://start?minutes=45&lid=1")
+        XCTAssertEqual(try run(["for", "2h"]).1, "caffeinate-my-mac://start?minutes=120&lid=0")
+        XCTAssertEqual(try run(["until", "9:30"]).1, "caffeinate-my-mac://start?until=9:30&lid=0")
+        XCTAssertEqual(try run(["--lid", "idle"]).1, "caffeinate-my-mac://idle?lid=1")
+        XCTAssertEqual(try run(["while", "123"]).1, "caffeinate-my-mac://while?pid=123&lid=0")
+        XCTAssertEqual(try run(["extend"]).1, "caffeinate-my-mac://extend?minutes=15")
+        XCTAssertEqual(try run(["off"]).1, "caffeinate-my-mac://stop")
+    }
+
+    func testBadInputFails() throws {
+        XCTAssertEqual(try run(["for", "soon"]).0, 2)
+        XCTAssertEqual(try run(["until", "9pm"]).0, 2)
+        XCTAssertEqual(try run(["while", "x"]).0, 2)
+        XCTAssertEqual(try run([]).0, 2)
+    }
+}
+
+final class LogicTests: XCTestCase {
+    func testAgentTreeCPU() {
+        let ps = """
+          1     0   0.0 /sbin/launchd
+        100     1   1.0 /Users/me/.local/bin/claude
+        101   100  30.0 /bin/zsh
+        102   101  12.5 /Applications/Some App.app/Contents/MacOS/Some App
+        103   100   0.5 claude
+        200     1  50.0 /usr/bin/python3
+        300     1   2.0 codex
+        301   300   4.0 node
+        """
+        XCTAssertEqual(AgentWatcher.agentTreeCPU(psOutput: ps), 1.0 + 30.0 + 12.5 + 0.5 + 2.0 + 4.0, accuracy: 0.001)
+        XCTAssertEqual(AgentWatcher.agentTreeCPU(psOutput: "  1 0 99.0 /Applications/Claude.app/Contents/MacOS/Claude"), 0)
+    }
+
+    func testURLCommands() {
+        func parse(_ s: String) -> URLCommand? { URLCommand.parse(URL(string: s)!) }
+        XCTAssertEqual(parse("caffeinate-my-mac://start?minutes=45&lid=1"), .start(seconds: 2700, lid: true))
+        XCTAssertEqual(parse("caffeinate-my-mac://start?minutes=30"), .start(seconds: 1800, lid: false))
+        XCTAssertNil(parse("caffeinate-my-mac://start?minutes=0"))
+        XCTAssertNil(parse("caffeinate-my-mac://start?minutes=99999"))
+        XCTAssertNil(parse("caffeinate-my-mac://start?until=25:00"))
+        XCTAssertEqual(parse("caffeinate-my-mac://commute"), .commute)
+        XCTAssertEqual(parse("caffeinate-my-mac://idle?lid=1"), .untilIdle(lid: true))
+        XCTAssertEqual(parse("caffeinate-my-mac://while?pid=123"), .whilePID(123, lid: false))
+        XCTAssertNil(parse("caffeinate-my-mac://while?pid=1"))
+        XCTAssertEqual(parse("caffeinate-my-mac://extend"), .extend(seconds: 900))
+        XCTAssertNil(parse("caffeinate-my-mac://extend?minutes=-5"))
+        XCTAssertEqual(parse("caffeinate-my-mac://stop"), .stop)
+        XCTAssertNil(parse("other://stop"))
+        XCTAssertNil(parse("caffeinate-my-mac://format-disk"))
+    }
+
+    func testSecondsUntil() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 8, minute: 0))!
+        XCTAssertEqual(secondsUntil(hour: 8, minute: 30, from: now, calendar: cal), 1800)
+        XCTAssertEqual(secondsUntil(hour: 7, minute: 0, from: now, calendar: cal), 23 * 3600)
+        XCTAssertNil(secondsUntil(hour: 24, minute: 0, from: now, calendar: cal))
+    }
+
+    func testBatteryEstimate() {
+        let b = PowerInfo.Battery(percent: 73, onBattery: true, minutesLeft: 107)
+        XCTAssertEqual(PowerInfo.estimatedUse(seconds: 45 * 60, battery: b), 31)
+        XCTAssertEqual(PowerInfo.estimatedUse(seconds: 10 * 3600, battery: b), 73)
+        XCTAssertNil(PowerInfo.estimatedUse(seconds: 60, battery: .init(percent: 80, onBattery: false, minutesLeft: nil)))
+    }
+
+    func testHotspotDetection() {
+        XCTAssertTrue(NetworkWatcher.isHotspot(online: true, expensive: true, gateways: []))
+        XCTAssertTrue(NetworkWatcher.isHotspot(online: true, expensive: false, gateways: ["172.20.10.1"]))
+        XCTAssertFalse(NetworkWatcher.isHotspot(online: true, expensive: false, gateways: ["192.168.1.1"]))
+        XCTAssertFalse(NetworkWatcher.isHotspot(online: false, expensive: true, gateways: ["172.20.10.1"]))
+    }
+
+    func testNtfyTopic() {
+        XCTAssertTrue(Notifier.isValidTopic("abraar-commute_1"))
+        XCTAssertFalse(Notifier.isValidTopic(""))
+        XCTAssertFalse(Notifier.isValidTopic("../admin"))
+        XCTAssertFalse(Notifier.isValidTopic("a?b=c"))
+    }
+
+    func testHistoryLine() {
+        var cal = Calendar.current
+        cal.timeZone = .current
+        let start = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 8, minute: 12))!
+        let r = SessionRecord(start: start, minutes: 31, lid: true, batteryUsed: 9, peakThermal: 1,
+                              offlineSeconds: 75, reason: "Agents idle")
+        XCTAssertEqual(r.line, "15 Oct 08:12 · 31m · lid · −9% · warm · offline 1m · Agents idle")
+    }
+}

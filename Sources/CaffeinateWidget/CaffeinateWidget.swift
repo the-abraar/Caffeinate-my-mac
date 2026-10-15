@@ -6,6 +6,7 @@ struct SessionEntry: TimelineEntry {
     var start: Date?
     var end: Date?
     var shutdown = false
+    var lid = false
 }
 
 struct Provider: TimelineProvider {
@@ -33,7 +34,7 @@ struct Provider: TimelineProvider {
               end > .now
         else { return SessionEntry(date: .now) }
         return SessionEntry(date: .now, start: end.addingTimeInterval(-Double(total)), end: end,
-                            shutdown: state["shutdown"] as? Bool ?? false)
+                            shutdown: state["shutdown"] as? Bool ?? false, lid: state["lid"] as? Bool ?? false)
     }
 }
 
@@ -49,6 +50,9 @@ struct CaffeinateWidgetView: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(entry.end != nil ? .green : .secondary)
                 Spacer()
+                if entry.lid {
+                    Image(systemName: "laptopcomputer").foregroundStyle(.orange)
+                }
                 if entry.shutdown {
                     Image(systemName: "power").foregroundStyle(.red)
                 }

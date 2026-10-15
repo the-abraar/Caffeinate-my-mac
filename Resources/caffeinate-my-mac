@@ -1,0 +1,64 @@
+#!/bin/bash
+# Command-line control for Caffeinate.app. Put it on your PATH:
+#   ln -s /Applications/Caffeinate.app/Contents/Resources/caffeinate-my-mac ~/.local/bin/
+set -euo pipefail
+
+open_url="${CAFFEINATE_OPEN:-/usr/bin/open -g}"
+state="$HOME/Library/Application Support/Caffeinate/state.plist"
+
+usage() {
+    cat <<'EOF'
+Usage: caffeinate-my-mac <command> [--lid]
+
+  for <45m|2h>      Stay awake for a duration
+  until <HH:MM>     Stay awake until a local time
+  commute           45 minutes with the lid closed
+  idle              Stay awake until Claude Code and Codex go idle
+  while <pid>       Stay awake while a process runs
+  extend [15m]      Add time to the running timer
+  off               End the session
+  status [--json]   Show the current session
+
+--lid keeps the Mac awake with the lid closed (needs the one-time setup in the app).
+EOF
+}
+
+lid=0
+json=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        --lid) lid=1 ;;
+        --json) json=1 ;;
+        -h | --help) usage; exit 0 ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- ${args[@]+"${args[@]}"}
+
+minutes() {
+    [[ "$1" =~ ^([0-9]+)([mh]?)$ ]] || { echo "Bad duration: $1 (use 45m or 2h)" >&2; return 2; }
+    local n=${BASH_REMATCH[1]}
+    [ "${BASH_REMATCH[2]}" = h ] && n=$((n * 60))
+    echo "$n"
+}
+
+go() { $open_url "caffeinate-my-mac://$1"; }
+
+case "${1:-}" in
+    for) m=$(minutes "${2:-}"); go "start?minutes=$m&lid=$lid" ;;
+    until)
+        [[ "${2:-}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]] || { echo "Bad time: ${2:-} (use HH:MM)" >&2; exit 2; }
+        go "start?until=$2&lid=$lid" ;;
+    commute) go commute ;;
+    idle) go "idle?lid=$lid" ;;
+    while)
+        [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "Bad pid: ${2:-}" >&2; exit 2; }
+        go "while?pid=$2&lid=$lid" ;;
+    extend) m=$(minutes "${2:-15m}"); go "extend?minutes=$m" ;;
+    off | stop) go stop ;;
+    status)
+        [ -f "$state" ] || { echo "Caffeinate has not run yet" >&2; exit 1; }
+        if [ "$json" = 1 ]; then /usr/bin/plutil -convert json -o - "$state"; echo; else /usr/bin/plutil -p "$state"; fi ;;
+    *) usage; exit 2 ;;
+esac

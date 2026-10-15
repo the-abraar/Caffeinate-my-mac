@@ -12,6 +12,11 @@ let package = Package(
         .executableTarget(
             name: "CaffeinateWidget",
             path: "Sources/CaffeinateWidget"
+        ),
+        .testTarget(
+            name: "CaffeinateAppTests",
+            dependencies: ["CaffeinateApp"],
+            path: "Tests/CaffeinateAppTests"
         )
     ]
 )
