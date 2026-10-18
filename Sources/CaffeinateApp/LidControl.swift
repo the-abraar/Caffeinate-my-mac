@@ -39,21 +39,29 @@ enum LidControl {
         name.range(of: "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$", options: .regularExpression) != nil
     }
 
-    /// One admin prompt: visudo validates the rule before it is installed root-owned 0440.
+    /// One admin prompt: the root shell writes the rule to a root-owned staging file, visudo checks
+    /// that file, and it is moved into place 0440. No user-writable copy exists for another process
+    /// to swap between the check and the install.
     /// Returns an error message, or nil on success. Blocks, so call it off the main thread.
     static func install() -> String? {
         let user = NSUserName()
         guard isValidUsername(user) else { return "Unsupported username: \(user)" }
-        let tmp = NSTemporaryDirectory() + "caffeinate-sudoers-\(UUID().uuidString)"
-        do { try sudoersContent(user: user).write(toFile: tmp, atomically: true, encoding: .utf8) } catch {
-            return error.localizedDescription
-        }
-        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let staged = sudoersPath + ".new"  // has a ".", so sudo ignores it until the mv
         if let error = runAdmin(
-            "/usr/sbin/visudo -c -f '\(tmp)' && /usr/bin/install -m 440 -o root -g wheel '\(tmp)' \(sudoersPath)",
+            "umask 077; /bin/rm -f \(staged) && \(writeRuleShell(user: user, to: staged))"
+                + " && /usr/sbin/visudo -c -f \(staged) && /usr/sbin/chown root:wheel \(staged)"
+                + " && /bin/chmod 440 \(staged) && /bin/mv -f \(staged) \(sudoersPath)"
+                + " || { /bin/rm -f \(staged); false; }",
             prompt: "Caffeinate needs your password once to keep your Mac awake with the lid closed."
         ) { return error }
         return installFailsafe()
+    }
+
+    /// Shell that writes `sudoersContent(user:)` to `path`. Each line is single-quoted, which is safe
+    /// because the content has no quotes (the username passed `isValidUsername`).
+    static func writeRuleShell(user: String, to path: String) -> String {
+        let lines = sudoersContent(user: user).split(separator: "\n").map { "'\($0)'" }.joined(separator: " ")
+        return "/usr/bin/printf '%s\\n' \(lines) > \(path)"
     }
 
     /// Removes the failsafe and the sudoers rule. If a session's marker is still there, the same

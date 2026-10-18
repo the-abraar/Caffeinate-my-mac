@@ -43,18 +43,33 @@ minutes() {
     echo "$n"
 }
 
-go() { $open_url "caffeinate-my-mac://$1"; }
+# check: wait up to 3 s for the app to answer in state.plist ("refused"), and exit 1 if it refused.
+go() {
+    local check=${2:-} refused=""
+    [ "$open_url" = echo ] && check=""
+    if [ -n "$check" ] && [ -f "$state" ]; then /usr/bin/plutil -remove refused "$state" 2>/dev/null || true; fi
+    $open_url "caffeinate-my-mac://$1"
+    [ -n "$check" ] || return 0
+    for _ in $(seq 30); do
+        refused=$(/usr/bin/plutil -extract refused raw "$state" 2>/dev/null) && break
+        sleep 0.1
+    done
+    if [ "$refused" = true ]; then
+        echo "Refused: $(/usr/bin/plutil -extract refusalReason raw "$state" 2>/dev/null || echo unknown)" >&2
+        exit 1
+    fi
+}
 
 case "${1:-}" in
-    for) m=$(minutes "${2:-}"); go "start?minutes=$m&lid=$lid" ;;
+    for) m=$(minutes "${2:-}"); go "start?minutes=$m&lid=$lid" check ;;
     until)
         [[ "${2:-}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]] || { echo "Bad time: ${2:-} (use HH:MM)" >&2; exit 2; }
-        go "start?until=$2&lid=$lid" ;;
-    commute) go commute ;;
-    idle) go "idle?lid=$lid" ;;
+        go "start?until=$2&lid=$lid" check ;;
+    commute) go commute check ;;
+    idle) go "idle?lid=$lid" check ;;
     while)
         [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "Bad pid: ${2:-}" >&2; exit 2; }
-        go "while?pid=$2&lid=$lid" ;;
+        go "while?pid=$2&lid=$lid" check ;;
     extend) m=$(minutes "${2:-15m}"); go "extend?minutes=$m" ;;
     off | stop) go stop ;;
     status)

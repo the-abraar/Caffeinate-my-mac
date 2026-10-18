@@ -17,6 +17,7 @@ cp "$OUT/CaffeinateApp" "$BUNDLE/Contents/MacOS/Caffeinate"
 chmod +x "$BUNDLE/Contents/MacOS/Caffeinate"
 cp Info.plist "$BUNDLE/Contents/Info.plist"
 cp Resources/failsafe.sh Resources/caffeinate-my-mac "$BUNDLE/Contents/Resources/"
+[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/"
 chmod +x "$BUNDLE/Contents/Resources/failsafe.sh" "$BUNDLE/Contents/Resources/caffeinate-my-mac"
 
 APPEX="$BUNDLE/Contents/PlugIns/CaffeinateWidget.appex"

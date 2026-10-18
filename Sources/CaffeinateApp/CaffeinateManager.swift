@@ -35,6 +35,12 @@ final class CaffeinateManager: ObservableObject {
             updateAgentWatching()
         }
     }
+    @Published var keepDisplayAwake = UserDefaults.standard.bool(forKey: "keepDisplayAwake") {
+        didSet { UserDefaults.standard.set(keepDisplayAwake, forKey: "keepDisplayAwake") }
+    }
+    @Published var shutdownCountdown: Int? = nil
+    private var shutdownTimer: Timer?
+    private var shutdownHold: Process?
     @Published var ntfyTopic = UserDefaults.standard.string(forKey: "ntfyTopic") ?? "" {
         didSet { UserDefaults.standard.set(ntfyTopic, forKey: "ntfyTopic") }
     }
@@ -123,15 +129,23 @@ final class CaffeinateManager: ObservableObject {
                ending: Ending = .timer, waitPID: pid_t? = nil) {
         // Refuse before touching the running session, so a bad request doesn't end it.
         if let pid = waitPID, kill(pid, 0) != 0, errno != EPERM {
-            lastSessionSummary = "No running process \(pid)"
+            let reason = "No running process \(pid)"
+            lastSessionSummary = reason
+            publishState(refusalReason: reason)
             return
         }
         if lid, let problem = lidBlocker() {
             lastSessionSummary = problem
+            publishState(refusalReason: problem)
             return
         }
         var seconds = ending == .timer ? seconds : (lid ? Self.lidCap : Self.idleCap)
-        guard seconds > 0 else { return }
+        guard seconds > 0 else {
+            let reason = "Duration must be greater than zero"
+            lastSessionSummary = reason
+            publishState(refusalReason: reason)
+            return
+        }
         // Lid to lid keeps sleep disabled throughout: with the lid shut, a gap would sleep the Mac.
         finish(nil, keepLid: lid)
 
@@ -141,12 +155,16 @@ final class CaffeinateManager: ObservableObject {
             // The failsafe's deadline sits a little past the app's own, so the app normally ends first.
             guard LidControl.begin(until: lidDeadline.addingTimeInterval(120)) else {
                 lidReady = false
-                lastSessionSummary = "Lid mode failed: sudo refused. Set it up again in Settings."
+                let reason = "Lid mode failed: sudo refused. Set it up again in Settings."
+                lastSessionSummary = reason
+                publishState(refusalReason: reason)
                 return
             }
         }
         guard spawnCaffeinate(seconds: seconds, lid: lid) else {
             if lid { LidControl.end() }
+            let reason = "Failed to launch caffeinate process"
+            publishState(refusalReason: reason)
             return
         }
 
@@ -191,7 +209,9 @@ final class CaffeinateManager: ObservableObject {
 
     func handle(_ url: URL) {
         guard let command = URLCommand.parse(url) else {
-            lastSessionSummary = "Ignored URL: \(url.absoluteString)"
+            let reason = "Ignored URL: \(url.absoluteString)"
+            lastSessionSummary = reason
+            publishState(refusalReason: reason)
             return
         }
         switch command {
@@ -221,8 +241,10 @@ final class CaffeinateManager: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
         // -w: caffeinate exits with this app, so a crash leaves no assertion behind.
-        // No -d in lid mode: the screen is shut anyway, and display sleep is what locks it.
-        p.arguments = (lid ? [] : ["-d"]) + ["-i", "-m", "-s", "-t", "\(seconds)", "-w", "\(getpid())"]
+        // Drop -d by default: display sleep is permitted so screen locks safely when user walks away.
+        // Display sleep prevention is opt-in via keepDisplayAwake (never in lid mode).
+        let displayArgs = (!lid && keepDisplayAwake) ? ["-d"] : []
+        p.arguments = displayArgs + ["-i", "-m", "-s", "-t", "\(seconds)", "-w", "\(getpid())"]
         p.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async { self?.caffeinateExited() }
         }
@@ -244,7 +266,44 @@ final class CaffeinateManager: ObservableObject {
         let shutdown = shutdownAfter
         finish(ending == .timer ? "Completed" : "Hit the \((lidMode ? Self.lidCap : Self.idleCap) / 3600) h cap",
                notify: true)
-        if shutdown { triggerShutdown() }
+        if shutdown { startShutdownCountdown() }
+    }
+
+    /// The session's caffeinate has exited, so hold idle sleep off for the countdown: a sleeping Mac
+    /// pauses the Timer and would never shut down.
+    func startShutdownCountdown() {
+        clearShutdownCountdown()
+        shutdownCountdown = 60
+        let hold = Process()
+        hold.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        hold.arguments = ["-i", "-t", "90", "-w", "\(getpid())"]
+        try? hold.run()
+        shutdownHold = hold
+        Notifier.send("Mac will force-quit all apps and shut down in 60 seconds. Open Caffeinate to cancel.", ntfyTopic: ntfyTopic)
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let count = self.shutdownCountdown else { return }
+            if count > 1 {
+                self.shutdownCountdown = count - 1
+            } else {
+                self.clearShutdownCountdown()
+                self.triggerShutdown()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        shutdownTimer = t
+    }
+
+    func cancelShutdownCountdown() {
+        clearShutdownCountdown()
+        lastSessionSummary = "Auto-shutdown canceled"
+    }
+
+    private func clearShutdownCountdown() {
+        shutdownTimer?.invalidate()
+        shutdownTimer = nil
+        shutdownHold?.terminate()
+        shutdownHold = nil
+        shutdownCountdown = nil
     }
 
     private func watchExit(of pid: pid_t) {
@@ -262,6 +321,7 @@ final class CaffeinateManager: ObservableObject {
     /// `reason` nil means a new session is replacing this one; `keepLid` leaves lid sleep
     /// disabled (and the marker with the original values) for that new lid session.
     private func finish(_ reason: String?, notify: Bool = false, keepLid: Bool = false) {
+        clearShutdownCountdown()
         guard isActive else { return }
         timer?.invalidate()
         timer = nil
@@ -496,11 +556,15 @@ final class CaffeinateManager: ObservableObject {
     private static let stateURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Caffeinate/state.plist")
 
-    private func publishState() {
+    private func publishState(refusalReason: String? = nil) {
         var state: [String: Any] = [:]
         if isActive, let endDate {
             state = ["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter,
-                     "lid": lidMode, "ending": ending.rawValue]
+                     "lid": lidMode, "ending": ending.rawValue, "refused": false]
+        }
+        if let refusalReason {
+            state["refused"] = true
+            state["refusalReason"] = refusalReason
         }
         try? FileManager.default.createDirectory(at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? (state as NSDictionary).write(to: Self.stateURL)

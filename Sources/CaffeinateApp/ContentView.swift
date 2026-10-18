@@ -30,6 +30,10 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
+            if let count = manager.shutdownCountdown {
+                shutdownCountdownBanner(count: count)
+            }
+
             statusCard
 
             if !manager.isActive {
@@ -38,10 +42,25 @@ struct ContentView: View {
 
             Divider()
 
-            settings
+            VStack(alignment: .leading, spacing: 6) {
+                Text("SETTINGS & PREFERENCES")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.5)
+                settings
+            }
+
+            Divider()
 
             if !manager.history.isEmpty {
-                historySection
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("SESSION HISTORY")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .tracking(0.5)
+                    historySection
+                }
+                Divider()
             }
 
             Text(manager.lastSessionSummary)
@@ -61,6 +80,32 @@ struct ContentView: View {
         }
         .padding(16)
         .frame(width: 320)
+    }
+
+    private func shutdownCountdownBanner(count: Int) -> some View {
+        VStack(spacing: 6) {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text("Auto-Shutting Down in \(count)s")
+                    .font(.subheadline.bold())
+                    .foregroundColor(.red)
+            }
+            Text("Auto-shutdown will force-quit all applications. Any unsaved files will be lost.")
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+            Button("Cancel Shutdown") {
+                manager.cancelShutdownCountdown()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.3), lineWidth: 1))
     }
 
     private var header: some View {
@@ -213,15 +258,30 @@ struct ContentView: View {
             }
 
             if !lid && (ends == .timer || ends == .time) {
-                Toggle("Shut down when finished", isOn: $shutdownAfter)
-                    .toggleStyle(.switch)
-                    .font(.subheadline)
-                    .onChange(of: shutdownAfter) { on in
-                        guard on else { return }
-                        manager.requestShutdownPermission { granted in
-                            if !granted { shutdownAfter = false }
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Shut down when finished", isOn: $shutdownAfter)
+                        .toggleStyle(.switch)
+                        .font(.subheadline)
+                        .onChange(of: shutdownAfter) { on in
+                            guard on else { return }
+                            manager.requestShutdownPermission { granted in
+                                if !granted { shutdownAfter = false }
+                            }
                         }
+                    if shutdownAfter {
+                        HStack(alignment: .top, spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                            Text("Force-quit warning: Auto-shutdown force-quits all open applications without saving unsaved files. A 60-second cancelable countdown will run before shutdown.")
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.red.opacity(0.1)))
                     }
+                }
             }
 
             if let seconds = plannedSeconds, ends == .timer || ends == .time,
@@ -271,6 +331,13 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Toggle("Keep display awake", isOn: $manager.keepDisplayAwake)
+                    .toggleStyle(.switch)
+                Text(manager.keepDisplayAwake ? "⚠️ Display won't sleep; screen will remain awake without locking." : "Display sleeps normally; screen locks safely while Mac stays awake.")
+                    .font(.caption2)
+                    .foregroundStyle(manager.keepDisplayAwake ? .orange : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Toggle("Auto commute on iPhone hotspot", isOn: $manager.autoCommute)
                     .disabled(!manager.lidReady)

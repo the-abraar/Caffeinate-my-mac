@@ -14,6 +14,14 @@ final class LidControlTests: XCTestCase {
         XCTAssertFalse(LidControl.sudoersPath.split(separator: "/").last!.contains("."))
     }
 
+    func testInstallShellWritesTheExactRule() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("sudoers-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let r = LidControl.run("/bin/sh", ["-c", LidControl.writeRuleShell(user: "first.last", to: file.path)])
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), LidControl.sudoersContent(user: "first.last"))
+    }
+
     func testUsernameAllowlist() {
         XCTAssertTrue(LidControl.isValidUsername("blackbird"))
         XCTAssertTrue(LidControl.isValidUsername("first.last"))
@@ -147,14 +155,15 @@ final class CLITests: XCTestCase {
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Resources/caffeinate-my-mac")
 
-    private func run(_ args: [String]) throws -> (Int32, String) {
+    private func run(_ args: [String], open: String = "echo", home: String = NSTemporaryDirectory(),
+                     stderr: Pipe = Pipe()) throws -> (Int32, String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
         p.arguments = [cli.path] + args
-        p.environment = ["CAFFEINATE_OPEN": "echo", "HOME": NSTemporaryDirectory()]
+        p.environment = ["CAFFEINATE_OPEN": open, "HOME": home, "PATH": "/usr/bin:/bin"]
         let out = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = stderr
         try p.run()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
@@ -169,6 +178,33 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(try run(["while", "123"]).1, "caffeinate-my-mac://while?pid=123&lid=0")
         XCTAssertEqual(try run(["extend"]).1, "caffeinate-my-mac://extend?minutes=15")
         XCTAssertEqual(try run(["off"]).1, "caffeinate-my-mac://stop")
+    }
+
+    /// A fake opener plays the app: it answers in state.plist the way publishState(refusalReason:) does.
+    private func answering(refused: Bool) throws -> (open: String, home: String) {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)")
+        let dir = home.appendingPathComponent("Library/Application Support/Caffeinate")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let opener = home.appendingPathComponent("open.sh")
+        let plist = "<plist version=\"1.0\"><dict><key>refused</key><\(refused)/>"
+            + "<key>refusalReason</key><string>Lid mode is not set up</string></dict></plist>"
+        try "#!/bin/sh\nprintf '%s' '\(plist)' > \"$HOME/Library/Application Support/Caffeinate/state.plist\"\n"
+            .write(to: opener, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: opener.path)
+        return (opener.path, home.path)
+    }
+
+    func testRefusedStartExitsNonZeroWithTheReason() throws {
+        let fake = try answering(refused: true)
+        let err = Pipe()
+        XCTAssertEqual(try run(["for", "45m", "--lid"], open: fake.open, home: fake.home, stderr: err).0, 1)
+        XCTAssertTrue(String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .contains("Lid mode is not set up"))
+    }
+
+    func testAcceptedStartExitsZero() throws {
+        let fake = try answering(refused: false)
+        XCTAssertEqual(try run(["for", "45m"], open: fake.open, home: fake.home).0, 0)
     }
 
     func testBadInputFails() throws {
