@@ -43,20 +43,25 @@ minutes() {
     echo "$n"
 }
 
-# check: wait up to 3 s for the app to answer in state.plist ("refused"), and exit 1 if it refused.
+# check: wait up to 10 s (room for a cold launch) for the app to answer in state.plist ("refused"),
+# exit 1 if it refused and 3 if it never answered.
 go() {
     local check=${2:-} refused=""
     [ "$open_url" = echo ] && check=""
     if [ -n "$check" ] && [ -f "$state" ]; then /usr/bin/plutil -remove refused "$state" 2>/dev/null || true; fi
     $open_url "caffeinate-my-mac://$1"
     [ -n "$check" ] || return 0
-    for _ in $(seq 30); do
+    for _ in $(seq 100); do
         refused=$(/usr/bin/plutil -extract refused raw "$state" 2>/dev/null) && break
         sleep 0.1
     done
     if [ "$refused" = true ]; then
         echo "Refused: $(/usr/bin/plutil -extract refusalReason raw "$state" 2>/dev/null || echo unknown)" >&2
         exit 1
+    fi
+    if [ -z "$refused" ]; then
+        echo "No answer from Caffeinate.app within 10 s. Is it installed and able to open?" >&2
+        exit 3
     fi
 }
 

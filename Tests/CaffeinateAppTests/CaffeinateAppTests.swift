@@ -207,6 +207,14 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(try run(["for", "45m"], open: fake.open, home: fake.home).0, 0)
     }
 
+    func testNoAnswerExitsThree() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)")
+        let err = Pipe()
+        XCTAssertEqual(try run(["for", "45m"], open: "/usr/bin/true", home: home.path, stderr: err).0, 3)
+        XCTAssertTrue(String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .contains("No answer"))
+    }
+
     func testBadInputFails() throws {
         XCTAssertEqual(try run(["for", "soon"]).0, 2)
         XCTAssertEqual(try run(["until", "9pm"]).0, 2)
