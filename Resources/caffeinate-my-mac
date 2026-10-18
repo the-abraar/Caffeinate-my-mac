@@ -20,6 +20,8 @@ Usage: caffeinate-my-mac <command> [--lid]
   status [--json]   Show the current session
 
 --lid keeps the Mac awake with the lid closed (needs the one-time setup in the app).
+
+Exit codes: 0 ok, 1 refused by the app, 2 bad input, 3 no answer from the app.
 EOF
 }
 

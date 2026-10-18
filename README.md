@@ -168,6 +168,10 @@ caffeinate-my-mac off
 caffeinate-my-mac status --json
 ```
 
+Exit codes: `0` ok, `1` the app refused (for example, the lid setup is missing), `2` bad input,
+`3` no answer from the app within 10 seconds (not installed, or it couldn't open). `extend` and
+`off` don't wait for an answer.
+
 The CLI opens `caffeinate-my-mac://` URLs, which you can also use from Shortcuts (**Open
 URLs**) or Raycast: `start?minutes=45&lid=1`, `start?until=09:30`, `commute`, `idle?lid=1`,
 `while?pid=123`, `extend?minutes=15`, `stop`. Any app on your Mac can open these URLs.
