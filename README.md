@@ -4,7 +4,8 @@
 sleep, or shut it down.**
 
 A tiny, native menu bar app for macOS. Set a timer, walk away, and your Mac stays awake
-(no sleep, no screen saver, no idle sleep) until the timer ends. Or let it stay awake
+(no idle sleep; the screen still turns off and locks unless you turn on **Keep display
+awake**) until the timer ends. Or let it stay awake
 until your AI agents finish, with the lid closed in your bag.
 
 ![platform](https://img.shields.io/badge/macOS-13%2B-blue)
@@ -12,6 +13,10 @@ until your AI agents finish, with the lid closed in your bag.
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ### [⬇️ Download Caffeinate.zip](https://github.com/the-abraar/Caffeinate-my-mac/releases/latest/download/Caffeinate.zip)
+
+The download is still v1.1.0 (2026-10-15). This README describes `main`: the display may
+sleep by default, auto shutdown has a 60-second countdown, the CLI has exit codes, and the
+app has an icon. Those changes arrive in the next release. Build from source to get them now.
 
 ---
 
@@ -37,8 +42,8 @@ until your AI agents finish, with the lid closed in your bag.
 - **Desktop widget**: see the time left right on your desktop.
 - **Shut down when finished**: good for overnight downloads, renders and backups.
 - **Command line and URL scheme**: control it from Terminal, Shortcuts or an agent.
-- **Lightweight**: it runs Apple's built-in `caffeinate` tool and `pmset`. Nothing runs
-  in the background once a session ends.
+- **Lightweight**: it runs Apple's built-in `caffeinate` tool and `pmset`. Once a session
+  ends, only the lid-mode failsafe check runs (every 30 seconds, and only after lid setup).
 
 ## Install (1 minute)
 
@@ -169,8 +174,9 @@ caffeinate-my-mac status --json
 ```
 
 Exit codes: `0` ok, `1` the app refused (for example, the lid setup is missing), `2` bad input,
-`3` no answer from the app within 10 seconds (not installed, or it couldn't open). `extend` and
-`off` don't wait for an answer.
+`3` no answer from the app within 10 seconds. If macOS can't find the app at all, `open` fails
+and the CLI exits `1` with its error. `extend` and `off` don't wait for an answer. (The v1.1.0
+download's CLI always exits `0`.)
 
 The CLI opens `caffeinate-my-mac://` URLs, which you can also use from Shortcuts (**Open
 URLs**) or Raycast: `start?minutes=45&lid=1`, `start?until=09:30`, `commute`, `idle?lid=1`,
@@ -191,8 +197,9 @@ Turn on **Shut down when finished** before you start (timer sessions without lid
 
 - The first time you turn it on, macOS asks to let Caffeinate control **System Events**.
   Click **OK**. You're asked now, so nothing will stop to ask at the end while you're away.
-- When the timer finishes, Caffeinate **force-quits every open app and shuts the Mac down**.
-  ⚠️ **Unsaved work is lost.** Save your work before you leave.
+- When the timer finishes, a 60-second countdown starts (cancel it from the ☕ menu, or with
+  `caffeinate-my-mac off`). Then Caffeinate **force-quits every open app and shuts the Mac
+  down**. ⚠️ **Unsaved work is lost.** Save your work before you leave.
 - If you clicked *Don't Allow* by mistake, enable it under
   System Settings → Privacy & Security → **Automation** → Caffeinate → System Events.
 
@@ -227,8 +234,9 @@ swift test            # unit tests, the failsafe script and the CLI
 
 ### How it works
 
-- A session spawns `/usr/bin/caffeinate -d -i -m -s -t <seconds> -w <app pid>` (without
-  `-d` in lid mode). `-w` makes it exit with the app, so a crash leaves no assertion behind.
+- A session spawns `/usr/bin/caffeinate -i -m -s -t <seconds> -w <app pid>`, plus `-d` only
+  when **Keep display awake** is on (never in lid mode). `-w` makes it exit with the app, so a
+  crash leaves no assertion behind.
 - Lid mode wraps the session with `sudo -n pmset -a disablesleep 1` and Low Power Mode, and
   then restores the previous values saved in the `lid-session` marker. `Resources/failsafe.sh`
   is the LaunchAgent that restores them if the app dies or hangs past the deadline.

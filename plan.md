@@ -136,3 +136,40 @@ The only reliable way to stay awake with the lid closed on battery and no extern
 - **Battery.** Local builds and tests by agents drain much faster than idle. The 15% floor stops the session before the Mac dies mid-write.
 - **Apple Silicon quirks.** The Power Protect issue shows that macOS can drop closed-display mode on a power-source change, and future macOS updates may change `pmset` behaviour. Acceptance test 4 covers the current case.
 - **Ad-hoc signing.** The sudoers rule doesn't depend on the signature, but the existing System Events Automation permission still resets after every rebuild.
+
+## Status and gaps (2026-10-19 review)
+
+Reviewed `main` at `a4196c1`. `swift test`: 24 tests pass. No lid-closed test was run. The latest release is still v1.1.0 (2026-10-15), three commits behind `main`.
+
+**Verified fixed in code:**
+- The CLI no longer reports success when the app never answers. It waits 10 s and exits 3 (`Resources/caffeinate-my-mac:56-67`, test `testNoAnswerExitsThree`).
+- Still in place from the 2026-10-18 pass: the display may sleep by default (`CaffeinateManager.swift:244-247`), auto shutdown has a 60 s countdown with Cancel (`CaffeinateManager.swift:274-293`, `ContentView.swift:90-103`), the sudoers rule is staged as root before `visudo` (`LidControl.swift:43-58`), and the app has an icon (`Info.plist:19-20`).
+
+**Still open:**
+- Unsigned and not notarized. The v1.1.0 zip is ad-hoc signed, `spctl` rejects it, and it has no stapled ticket.
+- Acceptance tests 1–6 above have still not been run.
+- The niche is still full of free alternatives: 2 stars, 0 forks, 3 downloads.
+
+**Bugs found:**
+- If macOS can't open `caffeinate-my-mac://` at all, `open` fails and `set -e` exits 1, which the README calls "refused". Exit 3 only covers an app that opens but stays silent (`Resources/caffeinate-my-mac:54`). Fix: `$open_url … || exit 3`, plus a test that uses `/usr/bin/false` as the opener.
+- The CLI can read an answer meant for something else. It clears `refused`, then opens the URL. If a running session ends or is extended before the app handles the URL, that write says `refused=false`, and the CLI exits 0 even if the app then refuses (`Resources/caffeinate-my-mac:53-59`, `CaffeinateManager.swift:559-571`). Fix: put a request id in the URL and wait for the app to echo it in `state.plist`.
+
+**Gaps, most important first:**
+1. **The fixes aren't released.** The README's download is v1.1.0. It still has the sudoers check-then-install race, keeps the display on, force-quits with no countdown, and its CLI always exits 0. `Info.plist` still says 1.1 (build 2), so a new build would carry the same version.
+2. **Unsigned, with an admin password prompt.** `build.sh:28-31` signs ad hoc, and the README tells users to strip the quarantine flag. Nobody can tell a tampered zip from the real one.
+3. **Lid mode is unproven.** The headline feature has never passed acceptance tests 1–6 on a closed lid.
+4. **No update path.** No Sparkle and no Homebrew cask, so v1.1.0 users never get the race fix.
+5. **No demand.** Free tools (Sleepless, adiab98/Awake, crafter awake, Lidless, Amphetamine) cover the same job, with better distribution.
+6. **The passwordless `pmset` rule works for any process running as the user.** The Set Up screen doesn't say so.
+7. **Failures stay quiet in the app.** A refused start from the popover or a URL only sets the grey caption; nothing is notified (`CaffeinateManager.swift:131-167`). The notification prompt appears at first launch with no context (`CaffeinateManager.swift:94`).
+8. **UI polish.** Settings and history sit in the menu bar popover, warnings start with ⚠️ instead of an SF Symbol, history dates are always 24-hour (`SessionHistory.swift:27`), there are no accessibility labels, and the README has no screenshots.
+9. **Weak spots in automation.** Any local app can start a lid session or stop one through the URL scheme. ntfy alerts go to a public topic with no token or custom server.
+10. **No revenue model.** MIT and free. Tips are the realistic ceiling.
+
+**Next steps, in order:**
+1. Owner: run acceptance tests 1–6 on the M4 on battery and write the results here (about 1 hour).
+2. Agent: fix the two CLI bugs above and bump `Info.plist` to 1.2, build 3 (about 30 minutes).
+3. Owner: build and release v1.2, so the download has the sudoers fix and the shutdown countdown (about 20 minutes).
+4. Owner: decide whether this is a public product or a personal tool. If public, join the Apple Developer Program ($99/yr).
+5. Agent, after step 4: Developer ID signing with hardened runtime and notarization in `build.sh`, SHA-256 in the release notes, a Homebrew cask, and two README screenshots.
+6. Agent: notify on refused starts, explain the `pmset` trade-off in Set Up, add accessibility labels, and use localized history dates.
