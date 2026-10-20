@@ -46,15 +46,17 @@ minutes() {
 }
 
 # check: wait up to 10 s (room for a cold launch) for the app to answer in state.plist ("refused"),
-# exit 1 if it refused and 3 if it never answered.
+# exit 1 if it refused and 3 if it never answered. The request id skips writes meant for something
+# else, like a running session ending before the app handles this URL.
 go() {
-    local check=${2:-} refused=""
+    local check=${2:-} refused="" url="caffeinate-my-mac://$1" req="$$.$RANDOM"
     [ "$open_url" = echo ] && check=""
-    if [ -n "$check" ] && [ -f "$state" ]; then /usr/bin/plutil -remove refused "$state" 2>/dev/null || true; fi
-    $open_url "caffeinate-my-mac://$1"
+    if [ -n "$check" ]; then [[ "$url" == *\?* ]] && url+="&req=$req" || url+="?req=$req"; fi
+    $open_url "$url" || { echo "Could not open Caffeinate.app. Is it installed?" >&2; exit 3; }
     [ -n "$check" ] || return 0
     for _ in $(seq 100); do
-        refused=$(/usr/bin/plutil -extract refused raw "$state" 2>/dev/null) && break
+        [ "$(/usr/bin/plutil -extract request raw "$state" 2>/dev/null)" = "$req" ] &&
+            refused=$(/usr/bin/plutil -extract refused raw "$state" 2>/dev/null) && break
         sleep 0.1
     done
     if [ "$refused" = true ]; then

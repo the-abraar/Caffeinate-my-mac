@@ -180,15 +180,22 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(try run(["off"]).1, "caffeinate-my-mac://stop")
     }
 
-    /// A fake opener plays the app: it answers in state.plist the way publishState(refusalReason:) does.
-    private func answering(refused: Bool) throws -> (open: String, home: String) {
+    /// A fake opener plays the app: it answers in state.plist the way publishState(refusalReason:) does,
+    /// echoing the URL's request id. `staleFirst` first writes an accepted answer with no id, like a
+    /// running session ending just before the app handles the URL.
+    private func answering(refused: Bool, staleFirst: Bool = false) throws -> (open: String, home: String) {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)")
         let dir = home.appendingPathComponent("Library/Application Support/Caffeinate")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let opener = home.appendingPathComponent("open.sh")
         let plist = "<plist version=\"1.0\"><dict><key>refused</key><\(refused)/>"
-            + "<key>refusalReason</key><string>Lid mode is not set up</string></dict></plist>"
-        try "#!/bin/sh\nprintf '%s' '\(plist)' > \"$HOME/Library/Application Support/Caffeinate/state.plist\"\n"
+            + "<key>refusalReason</key><string>Lid mode is not set up</string>"
+            + "<key>request</key><string>'\"${1##*req=}\"'</string></dict></plist>"
+        let stale = "<plist version=\"1.0\"><dict><key>refused</key><false/></dict></plist>"
+        let file = "\"$HOME/Library/Application Support/Caffeinate/state.plist\""
+        let answer = "printf '%s' '\(plist)' > \(file)"
+        let script = staleFirst ? "printf '%s' '\(stale)' > \(file)\n(sleep 0.5; \(answer)) &" : answer
+        try "#!/bin/sh\n\(script)\n"
             .write(to: opener, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: opener.path)
         return (opener.path, home.path)
@@ -205,6 +212,16 @@ final class CLITests: XCTestCase {
     func testAcceptedStartExitsZero() throws {
         let fake = try answering(refused: false)
         XCTAssertEqual(try run(["for", "45m"], open: fake.open, home: fake.home).0, 0)
+    }
+
+    func testAnswerForAnotherRequestIsIgnored() throws {
+        let fake = try answering(refused: true, staleFirst: true)
+        XCTAssertEqual(try run(["for", "45m", "--lid"], open: fake.open, home: fake.home).0, 1)
+    }
+
+    func testOpenFailureExitsThree() throws {
+        XCTAssertEqual(try run(["for", "45m"], open: "/usr/bin/false").0, 3)
+        XCTAssertEqual(try run(["off"], open: "/usr/bin/false").0, 3)
     }
 
     func testNoAnswerExitsThree() throws {

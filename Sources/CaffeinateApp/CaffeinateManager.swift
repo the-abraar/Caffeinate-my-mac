@@ -57,6 +57,7 @@ final class CaffeinateManager: ObservableObject {
     private var ticks = 0
     private var waitSource: DispatchSourceProcess?
     private var armedThisConnection = false
+    private var request: String?
 
     private let agents = AgentWatcher()
     private let network = NetworkWatcher()
@@ -208,6 +209,9 @@ final class CaffeinateManager: ObservableObject {
     }
 
     func handle(_ url: URL) {
+        // The CLI's request id, echoed in every state write this URL causes.
+        request = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "req" }?.value
+        defer { request = nil }
         guard let command = URLCommand.parse(url) else {
             let reason = "Ignored URL: \(url.absoluteString)"
             lastSessionSummary = reason
@@ -566,6 +570,7 @@ final class CaffeinateManager: ObservableObject {
             state["refused"] = true
             state["refusalReason"] = refusalReason
         }
+        if let request { state["request"] = request }
         try? FileManager.default.createDirectory(at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? (state as NSDictionary).write(to: Self.stateURL)
         WidgetCenter.shared.reloadAllTimelines()
