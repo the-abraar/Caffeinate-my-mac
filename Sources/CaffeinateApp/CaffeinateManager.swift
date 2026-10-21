@@ -242,6 +242,8 @@ final class CaffeinateManager: ObservableObject {
 
     /// Why lid mode can't start right now, or nil.
     private func lidBlocker() -> String? {
+        // A URL that cold-launches the app arrives before refreshSetup's async check returns.
+        if !lidReady { lidReady = power.isReady() }
         if !lidReady { return "Set up lid mode first (Settings)" }
         if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
             return "Mac is too hot for lid mode"

@@ -359,4 +359,23 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertEqual(power.calls, ["begin", "end"])
         XCTAssertEqual(manager.history.first?.reason, "Stopped")
     }
+
+    /// B2: a cold-launched app handles the CLI's URL before its async setup check has finished.
+    func testColdStartLidURLChecksSetupItself() {
+        XCTAssertFalse(manager.lidReady)
+        manager.handle(URL(string: "caffeinate-my-mac://start?minutes=45&lid=1&req=r1")!)
+        XCTAssertTrue(manager.isActive)
+        XCTAssertTrue(manager.lidMode)
+        XCTAssertEqual(state?["request"] as? String, "r1")
+        XCTAssertEqual(state?["refused"] as? Bool, false)
+    }
+
+    func testLidURLRefusedWhenSetupIsMissing() {
+        power.ready = false
+        manager.handle(URL(string: "caffeinate-my-mac://commute?req=r2")!)
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(state?["refused"] as? Bool, true)
+        XCTAssertEqual(state?["refusalReason"] as? String, "Set up lid mode first (Settings)")
+        XCTAssertFalse(power.calls.contains("begin"))
+    }
 }
