@@ -154,6 +154,9 @@ enum LidControl {
 
     static func removeMarker() { try? FileManager.default.removeItem(at: markerURL) }
 
+    /// The running session's marker, so upkeep can put back exactly what begin wrote.
+    private static var sessionMarker: Marker?
+
     /// Turns lid-closed awake on and battery Low Power Mode on (less heat in a bag).
     /// An existing marker means an earlier session never restored, so its saved values win.
     static func begin(until: Date) -> Bool {
@@ -162,6 +165,7 @@ enum LidControl {
         let marker = Marker(prior: existing?.prior ?? (sleepDisabled() ?? false), lowPowerPrior: lpm,
                             until: Int(until.timeIntervalSince1970))
         writeMarker(marker)  // before pmset, so a crash in between is still restored
+        sessionMarker = marker
         guard setSleepDisabled(true) else {
             restore(marker)
             return false
@@ -174,8 +178,14 @@ enum LidControl {
     /// `force` re-applies even if pmset already reads 1: Apple Silicon can drop closed-display
     /// mode after a power-source change while the value still reads 1.
     static func upkeep(force: Bool, until: Date) {
-        // A lost marker means the true prior is unknown; restoring to "sleep allowed" is the safe side.
-        if readMarker() == nil { writeMarker(Marker(prior: false, until: Int(until.timeIntervalSince1970))) }
+        if readMarker() == nil {
+            // The failsafe restored early (the app looked hung) and deleted it: set the session up again
+            // with the original values. Without them the prior is unknown, and "sleep allowed" is the safe side.
+            var m = sessionMarker ?? Marker(prior: false)
+            m.until = Int(until.timeIntervalSince1970)
+            writeMarker(m)
+            if m.lowPowerPrior != nil { setBatteryLowPowerMode(true) }
+        }
         if force || sleepDisabled() != true { setSleepDisabled(true) }
     }
 
