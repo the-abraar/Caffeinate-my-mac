@@ -38,7 +38,8 @@ app has an icon. Those changes arrive in the next release. Build from source to 
   an auto commute on a low battery), sent to your phone through [ntfy.sh](https://ntfy.sh) if
   you set a topic.
 - **Safety stops**: a lid-closed session ends if the Mac gets hot, if the battery drops
-  to 15%, or after 2 hours, and the Mac goes back to sleeping normally.
+  to 15%, or after 2 hours, and the Mac goes back to sleeping normally. Back-to-back lid
+  sessions share those 2 hours.
 - **Session history**: the last 20 sessions with battery used, heat and time offline.
 - **Desktop widget**: see the time left right on your desktop.
 - **Shut down when finished**: good for overnight downloads, renders and backups.
@@ -99,6 +100,8 @@ During a lid-closed session:
 - The session **stops by itself** if macOS reports serious heat, if the battery drops to
   15%, or after 2 hours. Whatever ends it, your previous sleep settings come back and the
   Mac sleeps again, even with the lid still closed.
+- The 2 hours count from the first of back-to-back lid sessions: starting Commute again during
+  a lid session (from the menu, the CLI or a URL) doesn't reset them. Stop the session first.
 - If you plug in or unplug the charger, the setting is applied again. On Apple Silicon,
   closed-lid mode can otherwise stop working after a power change.
 - Closing the lid turns the display off. For anyone who opens the lid to see a lock screen,

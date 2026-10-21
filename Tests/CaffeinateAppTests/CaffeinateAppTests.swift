@@ -419,6 +419,28 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertTrue(manager.lastSessionSummary.contains("Couldn't restore lid sleep"), manager.lastSessionSummary)
     }
 
+    /// B4: chaining lid sessions (commute every 45 min) must not push the 2 h cap forward.
+    func testChainedLidSessionsShareOneCap() {
+        manager.lidReady = true
+        manager.commute()
+        manager.lidStart = Date().addingTimeInterval(-110 * 60)  // 1 h 50 min into the lid stretch
+        manager.commute()
+        XCTAssertTrue(manager.isActive)
+        XCTAssertEqual(Double(manager.totalSeconds), 600, accuracy: 2)
+        manager.extend(seconds: 15 * 60)
+        XCTAssertEqual(Double(manager.totalSeconds), 600, accuracy: 2)
+        XCTAssertEqual(power.calls.filter { $0 == "end" }, [], "sleep must stay disabled between them")
+
+        manager.lidStart = Date().addingTimeInterval(-121 * 60)
+        manager.commute()
+        XCTAssertEqual(state?["refusalReason"] as? String, "Lid sessions stop after 2 h")
+        XCTAssertTrue(manager.isActive, "a refused request leaves the running session alone")
+
+        manager.stop()
+        manager.commute()  // a fresh stretch after sleep was restored
+        XCTAssertEqual(manager.totalSeconds, CaffeinateManager.commuteSeconds)
+    }
+
     func testLidURLRefusedWhenSetupIsMissing() {
         power.ready = false
         manager.handle(URL(string: "caffeinate-my-mac://commute?req=r2")!)

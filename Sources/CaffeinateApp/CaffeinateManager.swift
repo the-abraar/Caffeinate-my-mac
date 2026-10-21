@@ -48,6 +48,9 @@ final class CaffeinateManager: ObservableObject {
     private var process: Process?
     private var timer: Timer?
     private var startDate = Date()
+    /// Start of the current run of back-to-back lid sessions. Sleep stays disabled across them,
+    /// so the 2 h cap counts from here. Internal for tests.
+    var lidStart = Date()
     private var endDate: Date?
     private var batteryAtStart: Int?
     private var peakThermal = 0
@@ -67,7 +70,7 @@ final class CaffeinateManager: ObservableObject {
     private var powerObserver: PowerInfo.Observer?
     private var thermalObserver: NSObjectProtocol?
 
-    private var lidDeadline: Date { startDate.addingTimeInterval(TimeInterval(Self.lidCap)) }
+    private var lidDeadline: Date { lidStart.addingTimeInterval(TimeInterval(Self.lidCap)) }
 
     /// `dir` holds state.plist and history.json; tests pass a temp dir and a fake `power`.
     init(power: PowerControl = SystemPower(), dir: URL = LidControl.supportDir) {
@@ -147,12 +150,18 @@ final class CaffeinateManager: ObservableObject {
         if lid, let problem = lidBlocker() { return refuse(problem) }
         var seconds = ending == .timer ? seconds : (lid ? Self.lidCap : Self.idleCap)
         guard seconds > 0 else { return refuse("Duration must be greater than zero") }
+        // Lid to lid keeps sleep disabled throughout, so a new request can't restart the cap.
+        let chained = lid && isActive && lidMode
+        if lid {
+            seconds = min(seconds, chained ? Int(lidDeadline.timeIntervalSinceNow) : Self.lidCap)
+            guard seconds > 0 else { return refuse("Lid sessions stop after \(Self.lidCap / 3600) h") }
+        }
         // Lid to lid keeps sleep disabled throughout: with the lid shut, a gap would sleep the Mac.
         finish(nil, keepLid: lid)
 
         startDate = Date()
         if lid {
-            seconds = min(seconds, Self.lidCap)
+            if !chained { lidStart = startDate }
             // The failsafe's deadline sits a little past the app's own, so the app normally ends first.
             guard power.begin(until: lidDeadline.addingTimeInterval(120)) else {
                 lidReady = false
