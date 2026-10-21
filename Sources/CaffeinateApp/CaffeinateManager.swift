@@ -22,13 +22,13 @@ final class CaffeinateManager: ObservableObject {
     @Published var ending: Ending = .timer
     @Published var waitName: String?
     @Published var lastSessionSummary: String = "No session yet"
-    @Published var battery = PowerInfo.battery()
+    @Published var battery: PowerInfo.Battery?
     @Published var lidReady = false
     @Published var lidBusy = false
     @Published var screenLockImmediate: Bool?
     @Published var onHotspot = false
     @Published var agentsWorking = false
-    @Published var history = SessionHistory.load()
+    @Published var history: [SessionRecord]
     @Published var autoCommute = UserDefaults.standard.bool(forKey: "autoCommute") {
         didSet {
             UserDefaults.standard.set(autoCommute, forKey: "autoCommute")
@@ -59,12 +59,24 @@ final class CaffeinateManager: ObservableObject {
     private var armedThisConnection = false
     private var request: String?
 
+    private let power: PowerControl
+    private let stateURL: URL
+    private let historyURL: URL
     private let agents = AgentWatcher()
     private let network = NetworkWatcher()
     private var powerObserver: PowerInfo.Observer?
     private var thermalObserver: NSObjectProtocol?
 
     private var lidDeadline: Date { startDate.addingTimeInterval(TimeInterval(Self.lidCap)) }
+
+    /// `dir` holds state.plist and history.json; tests pass a temp dir and a fake `power`.
+    init(power: PowerControl = SystemPower(), dir: URL = LidControl.supportDir) {
+        self.power = power
+        stateURL = dir.appendingPathComponent("state.plist")
+        historyURL = dir.appendingPathComponent("history.json")
+        history = SessionHistory.load(from: historyURL)
+        battery = power.battery()
+    }
 
     var progress: Double {
         guard totalSeconds > 0 else { return 0 }
@@ -111,7 +123,7 @@ final class CaffeinateManager: ObservableObject {
     /// sudo and sysadminctl spawn processes, so check off the main thread.
     func refreshSetup() {
         DispatchQueue.global(qos: .userInitiated).async {
-            let ready = LidControl.isReady()
+            let ready = self.power.isReady()
             let lock = PowerInfo.screenLockIsImmediate()
             DispatchQueue.main.async {
                 self.lidReady = ready
@@ -154,7 +166,7 @@ final class CaffeinateManager: ObservableObject {
         if lid {
             seconds = min(seconds, Self.lidCap)
             // The failsafe's deadline sits a little past the app's own, so the app normally ends first.
-            guard LidControl.begin(until: lidDeadline.addingTimeInterval(120)) else {
+            guard power.begin(until: lidDeadline.addingTimeInterval(120)) else {
                 lidReady = false
                 let reason = "Lid mode failed: sudo refused. Set it up again in Settings."
                 lastSessionSummary = reason
@@ -163,7 +175,7 @@ final class CaffeinateManager: ObservableObject {
             }
         }
         guard spawnCaffeinate(seconds: seconds, lid: lid) else {
-            if lid { LidControl.end() }
+            if lid { _ = power.end() }
             let reason = "Failed to launch caffeinate process"
             publishState(refusalReason: reason)
             return
@@ -175,11 +187,11 @@ final class CaffeinateManager: ObservableObject {
         self.shutdownAfter = shutdownAfter && !lid  // a forced shutdown would kill the agents
         lidMode = lid
         self.ending = ending
-        batteryAtStart = PowerInfo.battery()?.percent
+        batteryAtStart = power.battery()?.percent
         peakThermal = ProcessInfo.processInfo.thermalState.rawValue
         offlineSeconds = 0
         offlineSince = network.isOnline ? nil : Date()
-        lidWasClosed = PowerInfo.isLidClosed()
+        lidWasClosed = power.isLidClosed()
         ticks = 0
         isActive = true
         startTimer()
@@ -234,7 +246,7 @@ final class CaffeinateManager: ObservableObject {
         if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
             return "Mac is too hot for lid mode"
         }
-        if let b = PowerInfo.battery(), b.onBattery, b.percent <= Self.batteryFloor {
+        if let b = power.battery(), b.onBattery, b.percent <= Self.batteryFloor {
             return "Battery at \(b.percent)%: too low for lid mode"
         }
         return nil
@@ -339,10 +351,10 @@ final class CaffeinateManager: ObservableObject {
 
         var summary = reason.map { "\($0) at \(Self.clock())" }
         if lidMode && !keepLid {
-            if !LidControl.end() {
+            if !power.end() {
                 summary = (summary ?? "") + ". Couldn't restore lid sleep, run: sudo pmset -a disablesleep 0"
             }
-            if PowerInfo.isLidClosed() { scheduleSleepCheck() }
+            if power.isLidClosed() { scheduleSleepCheck() }
         }
         if let since = offlineSince {
             offlineSeconds += Date().timeIntervalSince(since)
@@ -368,18 +380,18 @@ final class CaffeinateManager: ObservableObject {
     /// later, ask it to sleep (pmset sleepnow needs no root).
     private func scheduleSleepCheck() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
-            guard let self, !isActive, PowerInfo.isLidClosed() else { return }
+            guard let self, !isActive, power.isLidClosed() else { return }
             LidControl.run(LidControl.pmset, ["sleepnow"])
         }
     }
 
     private func record(_ reason: String) {
-        let used = batteryAtStart.flatMap { start in PowerInfo.battery().map { start - $0.percent } }
+        let used = batteryAtStart.flatMap { start in power.battery().map { start - $0.percent } }
         let r = SessionRecord(
             start: startDate, minutes: Int(Date().timeIntervalSince(startDate) / 60), lid: lidMode,
             batteryUsed: used, peakThermal: peakThermal, offlineSeconds: Int(offlineSeconds), reason: reason)
         history = Array(([r] + history).prefix(SessionHistory.limit))
-        SessionHistory.save(history)
+        SessionHistory.save(history, to: historyURL)
     }
 
     // MARK: Ticks and safety
@@ -399,7 +411,7 @@ final class CaffeinateManager: ObservableObject {
         remainingSeconds = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
         if lidMode {
             // Lock as the lid shuts: display sleep plus "require password immediately".
-            let closed = PowerInfo.isLidClosed()
+            let closed = power.isLidClosed()
             if closed && !lidWasClosed { LidControl.run(LidControl.pmset, ["displaysleepnow"]) }
             lidWasClosed = closed
         }
@@ -413,12 +425,12 @@ final class CaffeinateManager: ObservableObject {
             powerChanged()
             agentsWorking = agents.isWorking
             // On the main thread on purpose: it must never race finish()'s restore.
-            if lidMode { LidControl.upkeep(force: false, until: lidDeadline.addingTimeInterval(120)) }
+            if lidMode { power.upkeep(force: false, until: lidDeadline.addingTimeInterval(120)) }
         }
     }
 
     private func powerChanged() {
-        let b = PowerInfo.battery()
+        let b = power.battery()
         let sourceChanged = b?.onBattery != battery?.onBattery
         battery = b
         guard lidMode else { return }
@@ -426,7 +438,7 @@ final class CaffeinateManager: ObservableObject {
             finish("Stopped: battery at \(b.percent)%", notify: true)
         } else if sourceChanged {
             // Apple Silicon can drop closed-display mode when the charger is plugged or pulled.
-            LidControl.upkeep(force: true, until: lidDeadline.addingTimeInterval(120))
+            power.upkeep(force: true, until: lidDeadline.addingTimeInterval(120))
         }
     }
 
@@ -555,11 +567,8 @@ final class CaffeinateManager: ObservableObject {
 
     // MARK: Widget and CLI state
 
-    /// Read by the sandboxed widget through a home-relative read-only entitlement (Widget.entitlements),
-    /// and by `caffeinate-my-mac status`.
-    private static let stateURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Caffeinate/state.plist")
-
+    /// state.plist is read by the sandboxed widget through a home-relative read-only entitlement
+    /// (Widget.entitlements), and by `caffeinate-my-mac status`.
     private func publishState(refusalReason: String? = nil) {
         var state: [String: Any] = [:]
         if isActive, let endDate {
@@ -571,8 +580,8 @@ final class CaffeinateManager: ObservableObject {
             state["refusalReason"] = refusalReason
         }
         if let request { state["request"] = request }
-        try? FileManager.default.createDirectory(at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? (state as NSDictionary).write(to: Self.stateURL)
+        try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? (state as NSDictionary).write(to: stateURL)
         WidgetCenter.shared.reloadAllTimelines()
     }
 

@@ -313,3 +313,50 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(r.line, "15 Oct 08:12 · 31m · lid · −9% · warm · offline 1m · Agents idle")
     }
 }
+
+/// Stands in for sudo, pmset and IOKit, so manager tests never touch this Mac's power settings.
+final class FakePower: PowerControl {
+    var ready = true
+    var beginOK = true
+    var endOK = true
+    var batteryReading: PowerInfo.Battery? = .init(percent: 80, onBattery: false, minutesLeft: nil)
+    private(set) var calls: [String] = []
+
+    func isReady() -> Bool { calls.append("isReady"); return ready }
+    func begin(until: Date) -> Bool { calls.append("begin"); return beginOK }
+    func end() -> Bool { calls.append("end"); return endOK }
+    func upkeep(force: Bool, until: Date) { calls.append("upkeep") }
+    func battery() -> PowerInfo.Battery? { batteryReading }
+    func isLidClosed() -> Bool { false }  // never true: a closed lid would run pmset sleepnow / displaysleepnow
+}
+
+final class CaffeinateManagerTests: XCTestCase {
+    private var dir: URL!
+    private var power: FakePower!
+    private var manager: CaffeinateManager!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("manager-\(UUID().uuidString)")
+        power = FakePower()
+        manager = CaffeinateManager(power: power, dir: dir)
+    }
+
+    override func tearDown() {
+        manager.stop()  // also stops the real /usr/bin/caffeinate child
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    private var state: NSDictionary? { NSDictionary(contentsOf: dir.appendingPathComponent("state.plist")) }
+
+    func testLidSessionBeginsAndStopRestores() {
+        manager.lidReady = true
+        manager.commute()
+        XCTAssertTrue(manager.isActive)
+        XCTAssertTrue(manager.lidMode)
+        XCTAssertEqual(manager.totalSeconds, CaffeinateManager.commuteSeconds)
+        manager.stop()
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(power.calls, ["begin", "end"])
+        XCTAssertEqual(manager.history.first?.reason, "Stopped")
+    }
+}

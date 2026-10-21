@@ -260,3 +260,23 @@ enum LidControl {
         return r.output.contains("-128") ? "Cancelled" : r.output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+/// What a session needs from the system. CaffeinateManager takes it as a parameter, so tests can
+/// drive the state machine without sudo, pmset or real lid and battery readings.
+protocol PowerControl {
+    func isReady() -> Bool
+    func begin(until: Date) -> Bool
+    func end() -> Bool
+    func upkeep(force: Bool, until: Date)
+    func battery() -> PowerInfo.Battery?
+    func isLidClosed() -> Bool
+}
+
+struct SystemPower: PowerControl {
+    func isReady() -> Bool { LidControl.isReady() }
+    func begin(until: Date) -> Bool { LidControl.begin(until: until) }
+    func end() -> Bool { LidControl.end() }
+    func upkeep(force: Bool, until: Date) { LidControl.upkeep(force: force, until: until) }
+    func battery() -> PowerInfo.Battery? { PowerInfo.battery() }
+    func isLidClosed() -> Bool { PowerInfo.isLidClosed() }
+}

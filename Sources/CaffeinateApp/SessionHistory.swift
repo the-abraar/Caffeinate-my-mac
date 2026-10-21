@@ -33,12 +33,12 @@ enum SessionHistory {
     static let limit = 20
     static let url = LidControl.supportDir.appendingPathComponent("history.json")
 
-    static func load() -> [SessionRecord] {
+    static func load(from url: URL = url) -> [SessionRecord] {
         (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([SessionRecord].self, from: $0) } ?? []
     }
 
-    static func save(_ records: [SessionRecord]) {
-        try? FileManager.default.createDirectory(at: LidControl.supportDir, withIntermediateDirectories: true)
+    static func save(_ records: [SessionRecord], to url: URL = url) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(Array(records.prefix(limit))).write(to: url, options: .atomic)
     }
 }
