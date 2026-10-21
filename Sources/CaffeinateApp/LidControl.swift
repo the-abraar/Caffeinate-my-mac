@@ -110,6 +110,15 @@ enum LidControl {
         return load.status == 0 ? nil : "Could not load the failsafe agent: \(load.output)"
     }
 
+    /// Setup copies failsafe.sh once, so replace an older copy at launch: fixes to it must reach
+    /// Macs that were set up before. Atomic, so a failsafe run never sees a half-written script.
+    static func refreshFailsafeScript() {
+        guard let script = Bundle.main.url(forResource: "failsafe", withExtension: "sh"),
+              let new = try? Data(contentsOf: script), let old = try? Data(contentsOf: failsafeURL),
+              new != old else { return }
+        try? new.write(to: failsafeURL, options: .atomic)
+    }
+
     // MARK: Session
 
     struct Marker: Equatable {

@@ -127,6 +127,7 @@ final class CaffeinateManager: ObservableObject {
     /// sudo and sysadminctl spawn processes, so check off the main thread.
     func refreshSetup() {
         DispatchQueue.global(qos: .userInitiated).async {
+            LidControl.refreshFailsafeScript()
             let ready = self.power.isReady()
             let lock = PowerInfo.screenLockIsImmediate()
             DispatchQueue.main.async {
