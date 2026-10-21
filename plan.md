@@ -173,3 +173,22 @@ Reviewed `main` at `a4196c1`. `swift test`: 24 tests pass. No lid-closed test wa
 4. Owner: decide whether this is a public product or a personal tool. If public, join the Apple Developer Program ($99/yr).
 5. Agent, after step 4: Developer ID signing with hardened runtime and notarization in `build.sh`, SHA-256 in the release notes, a Homebrew cask, and two README screenshots.
 6. Agent: notify on refused starts, explain the `pmset` trade-off in Set Up, add accessibility labels, and use localized history dates.
+
+## Status (2026-10-22, fixes from `CrtiQue_Oct21.md`)
+
+Fixed in code on `main`, with tests where the logic changed (`swift test`: 36 pass). None of it has run on the M4 with the lid closed yet.
+
+- B2: a cold-launched `--lid` CLI call checks setup itself instead of being refused.
+- B3, B5: a failed restore notifies and moves the marker's deadline to now, so the failsafe retries every 30 s. The failsafe also restores at 10% or less on battery while the app runs. The app refreshes the installed `failsafe.sh` at launch, so Macs set up earlier get the fix.
+- B4: the 2 h cap counts across back-to-back lid sessions.
+- B6: every refused start notifies. Set Up says the sudoers rule covers any app running as the user.
+- B7: upkeep rewrites the session's own marker. B8: every state write answers `refused`. B9: `status` exits 1 when the app's pid is gone.
+- B10: sessions end on the wall clock (caffeinate's `-t` runs on uptime). B12: App Nap is off during a session.
+- B11 (npm Claude runs as `node`): not verified, since there's no npm install here. Left as is.
+- `CaffeinateManager` takes a `PowerControl`, so tests drive it with a fake and never call sudo or pmset.
+
+**Still to run on the M4, on battery:** acceptance tests 1–6 above, plus:
+- B3: remove the sudoers rule mid-session, stop, and check that the failsafe restores `SleepDisabled` within about 30 s.
+- B5: let a lid session run below 10% with the app stopped (`kill -STOP`), and check that the failsafe restores.
+- B10: start a 5-minute non-lid timer, sleep the Mac for 10 minutes, wake it, and check that the session ends within a second.
+- B12: check that the lock on lid close still fires about 1 s after closing, with the popover closed.
