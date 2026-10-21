@@ -51,7 +51,7 @@ final class CaffeinateManager: ObservableObject {
     /// Start of the current run of back-to-back lid sessions. Sleep stays disabled across them,
     /// so the 2 h cap counts from here. Internal for tests.
     var lidStart = Date()
-    private var endDate: Date?
+    var endDate: Date?  // internal for tests
     private var batteryAtStart: Int?
     private var peakThermal = 0
     private var offlineSeconds: TimeInterval = 0
@@ -61,6 +61,7 @@ final class CaffeinateManager: ObservableObject {
     private var waitSource: DispatchSourceProcess?
     private var armedThisConnection = false
     private var request: String?
+    private var activity: NSObjectProtocol?
 
     private let power: PowerControl
     private let stateURL: URL
@@ -186,6 +187,10 @@ final class CaffeinateManager: ObservableObject {
         lidWasClosed = power.isLidClosed()
         ticks = 0
         isActive = true
+        // Without this a menu bar app with its popover closed is App Napped, and the 1 s tick that
+        // locks on lid close and checks agents gets throttled. Idle sleep is left to caffeinate.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep, reason: "Caffeinate session")
         startTimer()
         publishState()
         updateAgentWatching()
@@ -282,6 +287,7 @@ final class CaffeinateManager: ObservableObject {
     }
 
     private func caffeinateExited() {
+        guard isActive else { return }  // tick() may have ended it first
         let shutdown = shutdownAfter
         finish(ending == .timer ? "Completed" : "Hit the \((lidMode ? Self.lidCap : Self.idleCap) / 3600) h cap",
                notify: true)
@@ -344,6 +350,8 @@ final class CaffeinateManager: ObservableObject {
         guard isActive else { return }
         timer?.invalidate()
         timer = nil
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
         waitSource?.cancel()
         waitSource = nil
         process?.terminationHandler = nil
@@ -415,9 +423,15 @@ final class CaffeinateManager: ObservableObject {
         }
     }
 
-    private func tick() {
+    func tick() {
         guard let endDate else { return }
         remainingSeconds = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        // caffeinate's -t runs on uptime (dispatch_time), which stops while the Mac sleeps, so after
+        // a sleep it outlives endDate. The wall clock decides.
+        if remainingSeconds == 0 {
+            caffeinateExited()
+            return
+        }
         if lidMode {
             // Lock as the lid shuts: display sleep plus "require password immediately".
             let closed = power.isLidClosed()

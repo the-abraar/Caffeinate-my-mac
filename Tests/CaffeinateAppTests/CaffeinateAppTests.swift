@@ -486,6 +486,15 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertEqual((state?["pid"] as? NSNumber)?.int32Value, getpid())
     }
 
+    /// B10: after a sleep, caffeinate's uptime-based -t timer is still running past endDate.
+    func testTimerEndsOnTheWallClock() {
+        manager.start(seconds: 600)
+        manager.endDate = Date().addingTimeInterval(-1)  // as if the Mac slept through the end
+        manager.tick()
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(manager.history.first?.reason, "Completed")
+    }
+
     func testLidURLRefusedWhenSetupIsMissing() {
         power.ready = false
         manager.handle(URL(string: "caffeinate-my-mac://commute?req=r2")!)
