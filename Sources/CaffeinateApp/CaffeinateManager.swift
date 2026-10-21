@@ -375,7 +375,9 @@ final class CaffeinateManager: ObservableObject {
         waitName = nil
         remainingSeconds = 0
         totalSeconds = 0
-        publishState()
+        // nil: start() is replacing this session and publishes the outcome itself. A write here
+        // would carry the request id with refused=false before start() could still refuse.
+        if reason != nil { publishState() }
         updateAgentWatching()
         if let summary {
             lastSessionSummary = summary
@@ -577,15 +579,14 @@ final class CaffeinateManager: ObservableObject {
     /// state.plist is read by the sandboxed widget through a home-relative read-only entitlement
     /// (Widget.entitlements), and by `caffeinate-my-mac status`.
     private func publishState(refusalReason: String? = nil) {
-        var state: [String: Any] = [:]
+        // Always an answer: a session that ends at once (`while` on a process that just quit) still
+        // tells the CLI it was accepted. `pid` lets `status` notice an app that crashed.
+        var state: [String: Any] = ["refused": refusalReason != nil, "pid": getpid()]
         if isActive, let endDate {
-            state = ["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter,
-                     "lid": lidMode, "ending": ending.rawValue, "refused": false]
+            state.merge(["end": endDate.timeIntervalSince1970, "total": totalSeconds, "shutdown": shutdownAfter,
+                         "lid": lidMode, "ending": ending.rawValue]) { $1 }
         }
-        if let refusalReason {
-            state["refused"] = true
-            state["refusalReason"] = refusalReason
-        }
+        if let refusalReason { state["refusalReason"] = refusalReason }
         if let request { state["request"] = request }
         try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? (state as NSDictionary).write(to: stateURL)

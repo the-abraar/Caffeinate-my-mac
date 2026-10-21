@@ -271,6 +271,39 @@ final class CLITests: XCTestCase {
             .contains("No answer"))
     }
 
+    /// B9: after a crash, state.plist still shows the last session; `status` must not report it.
+    func testStatusChecksTheAppIsAlive() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)")
+        let dir = home.appendingPathComponent("Library/Application Support/Caffeinate")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let state = dir.appendingPathComponent("state.plist")
+        func write(pid: Int32) throws {
+            try (["pid": pid, "end": Date().timeIntervalSince1970 + 600, "refused": false] as NSDictionary).write(to: state)
+        }
+
+        try write(pid: 999_999)
+        let err = Pipe()
+        XCTAssertEqual(try run(["status", "--json"], home: home.path, stderr: err).0, 1)
+        XCTAssertTrue(String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).contains("not running"))
+
+        try write(pid: getpid())  // alive, but not Caffeinate (a reused pid)
+        XCTAssertEqual(try run(["status"], home: home.path).0, 1)
+
+        let exe = home.appendingPathComponent("Caffeinate")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: exe)
+        XCTAssertEqual(LidControl.run("/usr/bin/codesign", ["-f", "-s", "-", exe.path]).status, 0)
+        let app = Process()
+        app.executableURL = exe
+        app.arguments = ["30"]
+        try app.run()
+        defer { app.terminate() }
+        try write(pid: app.processIdentifier)
+        let (code, out) = try run(["status", "--json"], home: home.path)
+        XCTAssertEqual(code, 0)
+        XCTAssertTrue(out.contains("\"end\""), out)
+    }
+
     func testBadInputFails() throws {
         XCTAssertEqual(try run(["for", "soon"]).0, 2)
         XCTAssertEqual(try run(["until", "9pm"]).0, 2)
@@ -439,6 +472,18 @@ final class CaffeinateManagerTests: XCTestCase {
         manager.stop()
         manager.commute()  // a fresh stretch after sleep was restored
         XCTAssertEqual(manager.totalSeconds, CaffeinateManager.commuteSeconds)
+    }
+
+    /// B8: `while <pid>` on a process that quits just after the check ends the session inside
+    /// handle(). That race isn't reproducible here, so this drives the same path (finish() during a
+    /// request) through stop: the write must still carry refused=false, or the CLI waits and exits 3.
+    func testSessionEndingInsideARequestStillAnswers() {
+        manager.start(seconds: 600)
+        manager.handle(URL(string: "caffeinate-my-mac://stop?req=r3")!)
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(state?["request"] as? String, "r3")
+        XCTAssertEqual(state?["refused"] as? Bool, false)
+        XCTAssertEqual((state?["pid"] as? NSNumber)?.int32Value, getpid())
     }
 
     func testLidURLRefusedWhenSetupIsMissing() {

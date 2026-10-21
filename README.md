@@ -183,7 +183,8 @@ caffeinate-my-mac status --json
 
 Exit codes: `0` ok, `1` the app refused (for example, the lid setup is missing), `2` bad input,
 `3` no answer from the app within 10 seconds, or macOS can't find the app at all. `extend` and
-`off` don't wait for an answer. (The v1.1.0 download's CLI always exits `0`.)
+`off` don't wait for an answer. `status` exits `1` when Caffeinate isn't running, even if the
+last state file still shows a session (after a crash). (The v1.1.0 download's CLI always exits `0`.)
 
 The CLI opens `caffeinate-my-mac://` URLs, which you can also use from Shortcuts (**Open
 URLs**) or Raycast: `start?minutes=45&lid=1`, `start?until=09:30`, `commute`, `idle?lid=1`,

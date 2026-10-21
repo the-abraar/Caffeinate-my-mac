@@ -83,6 +83,12 @@ case "${1:-}" in
     off | stop) go stop ;;
     status)
         [ -f "$state" ] || { echo "Caffeinate has not run yet" >&2; exit 1; }
+        # After a crash or kill -9 the file still shows the last session. The pid must still be Caffeinate.
+        pid=$(/usr/bin/plutil -extract pid raw "$state" 2>/dev/null || true)
+        if [ -n "$pid" ] && ! /bin/ps -p "$pid" -o comm= 2>/dev/null | /usr/bin/grep -Eq '(^|/)Caffeinate$'; then
+            echo "Caffeinate is not running" >&2
+            exit 1
+        fi
         if [ "$json" = 1 ]; then /usr/bin/plutil -convert json -o - "$state"; echo; else /usr/bin/plutil -p "$state"; fi ;;
     *) usage; exit 2 ;;
 esac
