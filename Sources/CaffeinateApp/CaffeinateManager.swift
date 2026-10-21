@@ -352,9 +352,13 @@ final class CaffeinateManager: ObservableObject {
         process = nil
 
         var summary = reason.map { "\($0) at \(Self.clock())" }
+        var notify = notify
         if lidMode && !keepLid {
             if !power.end() {
-                summary = (summary ?? "") + ". Couldn't restore lid sleep, run: sudo pmset -a disablesleep 0"
+                // Loud on purpose: with disablesleep stuck on, macOS's own low-battery sleep is off too.
+                summary = [summary, "Couldn't restore lid sleep. The failsafe retries every 30 s; to fix it now, run: sudo pmset -a disablesleep 0"]
+                    .compactMap { $0 }.joined(separator: ". ")
+                notify = true
             }
             if power.isLidClosed() { scheduleSleepCheck() }
         }

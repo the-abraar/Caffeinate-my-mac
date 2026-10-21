@@ -113,8 +113,11 @@ so Caffeinate never relies on itself alone to turn it off:
 - Every session writes `~/Library/Application Support/Caffeinate/lid-session` with your
   previous settings and a hard deadline.
 - A LaunchAgent (`com.abraar.caffeinateapp.failsafe`) checks it every 30 seconds and at
-  login. If Caffeinate isn't running, or is still running past the deadline, the failsafe
+  login. If Caffeinate isn't running, is still running past the deadline, or the battery is
+  at 10% or less (`disablesleep` also turns off macOS's own low-battery sleep), the failsafe
   restores your previous settings.
+- If Caffeinate can't restore them itself (for example, the sudoers rule was removed), it
+  notifies you and moves the deadline to now, so the failsafe keeps retrying every 30 seconds.
 - When Caffeinate starts, it also restores the settings left behind by a run that crashed.
 
 **To remove it:** ☕ → Settings → **Revoke**. This restores sleep if a session is running,

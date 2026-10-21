@@ -183,12 +183,19 @@ enum LidControl {
     @discardableResult
     static func end() -> Bool { restore(readMarker() ?? Marker(prior: false)) }
 
-    /// Puts sleep and Low Power Mode back. Keeps the marker if sudo refused, so the failsafe retries.
+    /// Puts sleep and Low Power Mode back. If sudo refused, the marker stays with its deadline set
+    /// to now: the failsafe skips a live app until the deadline, and would otherwise wait up to 2 h.
     @discardableResult
     static func restore(_ m: Marker) -> Bool {
         var ok = setSleepDisabled(m.prior)
         if let lpm = m.lowPowerPrior { ok = setBatteryLowPowerMode(lpm) && ok }
-        if ok { removeMarker() }
+        if ok {
+            removeMarker()
+        } else {
+            var due = m
+            due.until = Int(Date().timeIntervalSince1970)
+            writeMarker(due)
+        }
         return ok
     }
 

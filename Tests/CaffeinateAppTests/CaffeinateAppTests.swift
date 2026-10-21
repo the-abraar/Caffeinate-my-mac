@@ -74,12 +74,22 @@ final class FailsafeScriptTests: XCTestCase {
         return path
     }
 
+    /// Prints `pmset -g batt` output, so the result doesn't depend on this Mac's battery.
+    private func fakePmset(_ source: String, _ percent: Int) throws -> String {
+        let path = dir.appendingPathComponent("pmset").path
+        let out = "Now drawing from '\(source)'\n -InternalBattery-0 (id=1)\t\(percent)%; discharging; 0:20 remaining present: true"
+        try "#!/bin/sh\nprintf '%s\\n' \"\(out)\"\n".write(toFile: path, atomically: true, encoding: .utf8)
+        chmod(path, 0o755)
+        return path
+    }
+
     @discardableResult
-    private func runScript(sudoExit: Int = 0) throws -> Int32 {
+    private func runScript(sudoExit: Int = 0, battery: (String, Int) = ("AC Power", 100)) throws -> Int32 {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = [script.path]
-        p.environment = ["HOME": dir.path, "CAFFEINATE_SUPPORT_DIR": dir.path, "CAFFEINATE_SUDO": try fakeSudo(exit: sudoExit)]
+        p.environment = ["HOME": dir.path, "CAFFEINATE_SUPPORT_DIR": dir.path, "CAFFEINATE_SUDO": try fakeSudo(exit: sudoExit),
+                         "CAFFEINATE_PMSET": try fakePmset(battery.0, battery.1)]
         try p.run()
         p.waitUntilExit()
         return p.terminationStatus
@@ -93,6 +103,8 @@ final class FailsafeScriptTests: XCTestCase {
     private func fakeApp() throws -> Process {
         let exe = dir.appendingPathComponent("Caffeinate")
         try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: exe)
+        // A copied platform binary is SIGKILLed within a second; an ad-hoc signature keeps it alive.
+        XCTAssertEqual(LidControl.run("/usr/bin/codesign", ["-f", "-s", "-", exe.path]).status, 0)
         let p = Process()
         p.executableURL = exe
         p.arguments = ["30"]
@@ -133,6 +145,33 @@ final class FailsafeScriptTests: XCTestCase {
         defer { app.terminate() }
         let until = Int(Date().timeIntervalSince1970) - 1
         try "prior=0\npid=\(app.processIdentifier)\nuntil=\(until)\n".write(to: marker, atomically: true, encoding: .utf8)
+        try runScript()
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0"])
+    }
+
+    /// B5: a hung app never reaches its 15% stop, and disablesleep has turned off low-battery sleep.
+    func testLiveAppOnLowBatteryIsRestored() throws {
+        let app = try fakeApp()
+        defer { app.terminate() }
+        let until = Int(Date().timeIntervalSince1970) + 600
+        try "prior=0\nlpm=0\npid=\(app.processIdentifier)\nuntil=\(until)\n".write(to: marker, atomically: true, encoding: .utf8)
+        try runScript(battery: ("Battery Power", 11))
+        XCTAssertEqual(calls, [])
+        try runScript(battery: ("AC Power", 5))
+        XCTAssertEqual(calls, [])
+        try runScript(battery: ("Battery Power", 10))
+        XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0", "-n /usr/bin/pmset -b lowpowermode 0"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// B3: a failed restore rewrites the marker with until = now (LidControl.restore), and the
+    /// failsafe must then act on it at once, although the app is still running.
+    func testLiveAppWithDeadlineNowIsRestored() throws {
+        let app = try fakeApp()
+        defer { app.terminate() }
+        let now = Int(Date().timeIntervalSince1970)
+        try LidControl.Marker(prior: false, pid: app.processIdentifier, until: now).text
+            .write(to: marker, atomically: true, encoding: .utf8)
         try runScript()
         XCTAssertEqual(calls, ["-n /usr/bin/pmset -a disablesleep 0"])
     }
@@ -368,6 +407,16 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertTrue(manager.lidMode)
         XCTAssertEqual(state?["request"] as? String, "r1")
         XCTAssertEqual(state?["refused"] as? Bool, false)
+    }
+
+    /// B3: a failed restore says so (LidControl.restore hands the marker to the failsafe).
+    func testFailedRestoreIsReported() {
+        manager.lidReady = true
+        manager.commute()
+        power.endOK = false
+        manager.stop()
+        XCTAssertFalse(manager.isActive)
+        XCTAssertTrue(manager.lastSessionSummary.contains("Couldn't restore lid sleep"), manager.lastSessionSummary)
     }
 
     func testLidURLRefusedWhenSetupIsMissing() {
