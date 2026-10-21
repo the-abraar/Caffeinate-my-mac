@@ -34,8 +34,9 @@ app has an icon. Those changes arrive in the next release. Build from source to 
 - **Until an app quits**: stays awake while a chosen app or process is running.
 - **iPhone hotspot aware**: optionally turns on lid mode by itself when you join your
   iPhone's hotspot while agents are working.
-- **Phone alerts**: a notification when a session ends, sent to your phone through
-  [ntfy.sh](https://ntfy.sh) if you set a topic.
+- **Phone alerts**: a notification when a session ends or a request is refused (for example,
+  an auto commute on a low battery), sent to your phone through [ntfy.sh](https://ntfy.sh) if
+  you set a topic.
 - **Safety stops**: a lid-closed session ends if the Mac gets hot, if the battery drops
   to 15%, or after 2 hours, and the Mac goes back to sleeping normally.
 - **Session history**: the last 20 sessions with battery used, heat and time offline.
@@ -85,8 +86,9 @@ display. The only way to keep it running on battery with the lid shut is the sys
    /usr/bin/pmset -b lowpowermode 0
    /usr/bin/pmset -b lowpowermode 1
    ```
-   The rule is checked with `visudo` before it's installed. Setup also installs a small
-   failsafe (see below).
+   The rule is checked with `visudo` before it's installed. It applies to your user, not
+   only to Caffeinate, so any app running as you can turn `disablesleep` on and keep the Mac
+   awake. Setup also installs a small failsafe (see below).
 2. Click **Commute: 45 min, lid closed**, or turn on **Keep awake with lid closed** for any
    session, then close the lid.
 

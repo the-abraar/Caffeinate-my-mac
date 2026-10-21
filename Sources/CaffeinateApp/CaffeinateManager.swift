@@ -142,23 +142,11 @@ final class CaffeinateManager: ObservableObject {
                ending: Ending = .timer, waitPID: pid_t? = nil) {
         // Refuse before touching the running session, so a bad request doesn't end it.
         if let pid = waitPID, kill(pid, 0) != 0, errno != EPERM {
-            let reason = "No running process \(pid)"
-            lastSessionSummary = reason
-            publishState(refusalReason: reason)
-            return
+            return refuse("No running process \(pid)")
         }
-        if lid, let problem = lidBlocker() {
-            lastSessionSummary = problem
-            publishState(refusalReason: problem)
-            return
-        }
+        if lid, let problem = lidBlocker() { return refuse(problem) }
         var seconds = ending == .timer ? seconds : (lid ? Self.lidCap : Self.idleCap)
-        guard seconds > 0 else {
-            let reason = "Duration must be greater than zero"
-            lastSessionSummary = reason
-            publishState(refusalReason: reason)
-            return
-        }
+        guard seconds > 0 else { return refuse("Duration must be greater than zero") }
         // Lid to lid keeps sleep disabled throughout: with the lid shut, a gap would sleep the Mac.
         finish(nil, keepLid: lid)
 
@@ -168,17 +156,12 @@ final class CaffeinateManager: ObservableObject {
             // The failsafe's deadline sits a little past the app's own, so the app normally ends first.
             guard power.begin(until: lidDeadline.addingTimeInterval(120)) else {
                 lidReady = false
-                let reason = "Lid mode failed: sudo refused. Set it up again in Settings."
-                lastSessionSummary = reason
-                publishState(refusalReason: reason)
-                return
+                return refuse("Lid mode failed: sudo refused. Set it up again in Settings.")
             }
         }
         guard spawnCaffeinate(seconds: seconds, lid: lid) else {
             if lid { _ = power.end() }
-            let reason = "Failed to launch caffeinate process"
-            publishState(refusalReason: reason)
-            return
+            return refuse("Failed to launch caffeinate process")
         }
 
         totalSeconds = seconds
@@ -225,6 +208,7 @@ final class CaffeinateManager: ObservableObject {
         request = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "req" }?.value
         defer { request = nil }
         guard let command = URLCommand.parse(url) else {
+            // Not refuse(): any local app can open these, so its text never goes to a notification.
             let reason = "Ignored URL: \(url.absoluteString)"
             lastSessionSummary = reason
             publishState(refusalReason: reason)
@@ -238,6 +222,14 @@ final class CaffeinateManager: ObservableObject {
         case let .extend(seconds): extend(seconds: seconds)
         case .stop: stop()
         }
+    }
+
+    /// Every refusal is notified: an auto commute or an agent's request that fails quietly lets
+    /// the Mac sleep mid-agent once the lid closes.
+    private func refuse(_ reason: String) {
+        lastSessionSummary = reason
+        publishState(refusalReason: reason)
+        Notifier.send("Not started: \(reason)", ntfyTopic: ntfyTopic)
     }
 
     /// Why lid mode can't start right now, or nil.

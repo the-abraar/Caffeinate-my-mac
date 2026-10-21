@@ -320,7 +320,7 @@ struct ContentView: View {
                     }
                 }
                 if !manager.lidReady {
-                    Text("Asks for your password once. Caffeinate may then run only `pmset -a disablesleep 0/1` and `pmset -b lowpowermode 0/1`, plus a failsafe that restores sleep if the app dies.")
+                    Text("Asks for your password once. After that, any app running as you can run `pmset -a disablesleep 0/1` and `pmset -b lowpowermode 0/1` without a password (nothing else), so any of them could keep the Mac awake. Also installs a failsafe that restores sleep if Caffeinate dies.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
