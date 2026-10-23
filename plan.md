@@ -218,3 +218,11 @@ Still for the owner: the auto-arm on a real iPhone hotspot (from the 2026-10-15 
 5. Pre-start battery estimate: already in place.
 6. Keep awake while a process runs: already in place.
 7. **Deferred to the owner:** a Shortcuts automation on joining the hotspot. It needs someone to check in the Shortcuts app on macOS 26 whether a Wi-Fi network trigger exists and runs without asking. If it does, the action is **Open URLs** with `caffeinate-my-mac://idle?lid=1`; it could then replace the in-app auto-arm.
+
+**Still for the owner (needs the M4, the lid closed, a phone or a decision):**
+- Acceptance tests 1-6 on battery. Test 5 can now use the `defaults` hook above.
+- The 2026-10-22 hardware checks: B3, B5, B10, B12.
+- From 2026-10-15: lock screen on a reopened lid on macOS 26, `pmset sleepnow` after a session ends with the lid shut, the auto-arm on a real hotspot, and the ntfy push.
+- The Shortcuts trigger (Phase 4 item 7).
+- Public product or personal tool (`../decision.md` lines 40 and 63 still disagree). Signing, notarization and a cask wait on it.
+- The rebuilt app was not launched here: only `swift build`, `swift test` (40 pass) and `./build.sh`.
