@@ -40,7 +40,8 @@ app has an icon. Those changes arrive in the next release. Build from source to 
 - **Safety stops**: a lid-closed session ends if the Mac gets hot, if the battery drops
   to 15%, or after 2 hours, and the Mac goes back to sleeping normally. Back-to-back lid
   sessions share those 2 hours.
-- **Session history**: the last 20 sessions with battery used, heat and time offline.
+- **Session history**: the last 20 sessions with battery used, heat, time offline and, for lid
+  sessions, how long the lid was actually shut.
 - **Desktop widget**: see the time left right on your desktop.
 - **Shut down when finished**: good for overnight downloads, renders and backups.
 - **Command line and URL scheme**: control it from Terminal, Shortcuts or an agent.

@@ -209,3 +209,12 @@ Fixed in code on `main`, with tests where the logic changed (`swift test`: 36 pa
 - README tips: added that the hotspot stays on while the Mac stays connected, and that `tcpkeepalive` is already 1 (checked on this Mac).
 
 Still for the owner: the auto-arm on a real iPhone hotspot (from the 2026-10-15 list).
+
+**Phase 4, in the ranked order:**
+1. Launch at login (`SMAppService.mainApp`): already in place.
+2. Extend +15 min and Until HH:MM: already in place.
+3. CLI and URL scheme: already in place.
+4. Session history: lid sessions now also record how long the lid was really shut ("31m · lid closed 28m"). Records from older builds still load (tested). The closed time is counted from the 1 s tick, so it isn't unit-tested: a fake closed lid would make the test run `pmset displaysleepnow` and, 60 s after the session, `pmset sleepnow` on this Mac.
+5. Pre-start battery estimate: already in place.
+6. Keep awake while a process runs: already in place.
+7. **Deferred to the owner:** a Shortcuts automation on joining the hotspot. It needs someone to check in the Shortcuts app on macOS 26 whether a Wi-Fi network trigger exists and runs without asking. If it does, the action is **Open URLs** with `caffeinate-my-mac://idle?lid=1`; it could then replace the in-app auto-arm.

@@ -392,6 +392,16 @@ final class LogicTests: XCTestCase {
         us.setLocalizedDateFormatFromTemplate("dMMMjmm")
         XCTAssertTrue(gb.string(from: start).contains("08:12"), gb.string(from: start))
         XCTAssertTrue(us.string(from: start).contains("8:12") && us.string(from: start).hasSuffix("AM"), us.string(from: start))
+
+        // Phase 4: lid sessions record how long the lid was really shut.
+        var closed = r
+        closed.lidClosedMinutes = 28
+        XCTAssertTrue(closed.line.contains(" · 31m · lid closed 28m · "), closed.line)
+        // history.json written by older builds has no lidClosedMinutes and must still load.
+        let old = #"[{"start":0,"minutes":5,"lid":true,"peakThermal":0,"offlineSeconds":0,"reason":"Stopped"}]"#
+        let records = try? JSONDecoder().decode([SessionRecord].self, from: Data(old.utf8))
+        XCTAssertEqual(records?.first?.lidClosedMinutes, nil)
+        XCTAssertEqual(records?.count, 1)
     }
 }
 

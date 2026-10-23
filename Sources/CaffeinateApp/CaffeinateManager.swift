@@ -60,6 +60,8 @@ final class CaffeinateManager: ObservableObject {
     private var offline: [(start: Date, seconds: Int)] = []  // each dropout, for the summary
     private var offlineSince: Date?
     private var lidWasClosed = false
+    private var lidClosedSeconds: TimeInterval = 0  // how long the lid was actually shut, for history
+    private var lidClosedSince: Date?
     private var ticks = 0
     private var waitSource: DispatchSourceProcess?
     private var armedThisConnection = false
@@ -189,6 +191,8 @@ final class CaffeinateManager: ObservableObject {
         offline = []
         offlineSince = network.isOnline ? nil : Date()
         lidWasClosed = power.isLidClosed()
+        lidClosedSeconds = 0
+        lidClosedSince = lid && lidWasClosed ? startDate : nil
         ticks = 0
         isActive = true
         // Without this a menu bar app with its popover closed is App Napped, and the 1 s tick that
@@ -408,7 +412,9 @@ final class CaffeinateManager: ObservableObject {
         let used = batteryAtStart.flatMap { start in power.battery().map { start - $0.percent } }
         let r = SessionRecord(
             start: startDate, minutes: Int(Date().timeIntervalSince(startDate) / 60), lid: lidMode,
-            batteryUsed: used, peakThermal: peakThermal, offlineSeconds: offline.reduce(0) { $0 + $1.seconds }, reason: reason)
+            batteryUsed: used, peakThermal: peakThermal, offlineSeconds: offline.reduce(0) { $0 + $1.seconds }, reason: reason,
+            lidClosedMinutes: lidMode
+                ? Int((lidClosedSeconds + (lidClosedSince.map { Date().timeIntervalSince($0) } ?? 0)) / 60) : nil)
         history = Array(([r] + history).prefix(SessionHistory.limit))
         SessionHistory.save(history, to: historyURL)
     }
@@ -437,7 +443,14 @@ final class CaffeinateManager: ObservableObject {
         if lidMode {
             // Lock as the lid shuts: display sleep plus "require password immediately".
             let closed = power.isLidClosed()
-            if closed && !lidWasClosed { LidControl.run(LidControl.pmset, ["displaysleepnow"]) }
+            if closed && !lidWasClosed {
+                LidControl.run(LidControl.pmset, ["displaysleepnow"])
+                lidClosedSince = Date()
+            }
+            if !closed, let since = lidClosedSince {
+                lidClosedSeconds += Date().timeIntervalSince(since)
+                lidClosedSince = nil
+            }
             lidWasClosed = closed
         }
         if ending == .agentsIdle,

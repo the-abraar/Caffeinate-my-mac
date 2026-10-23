@@ -9,12 +9,13 @@ struct SessionRecord: Codable, Equatable, Identifiable {
     var peakThermal: Int    // ProcessInfo.ThermalState raw value: 0 nominal ... 3 critical
     var offlineSeconds: Int
     var reason: String
+    var lidClosedMinutes: Int? = nil  // lid sessions only; nil in records written before 2026-10-24
 
     var id: Date { start }
 
     var line: String {
         var parts = [Self.clock.string(from: start), "\(minutes)m"]
-        if lid { parts.append("lid") }
+        if lid { parts.append(lidClosedMinutes.map { "lid closed \($0)m" } ?? "lid") }
         if let b = batteryUsed, b != 0 { parts.append(b > 0 ? "−\(b)%" : "+\(-b)%") }
         if peakThermal > 0 { parts.append(["", "warm", "hot", "critical heat"][min(peakThermal, 3)]) }
         if offlineSeconds > 0 { parts.append("offline " + (offlineSeconds >= 60 ? "\(offlineSeconds / 60)m" : "\(offlineSeconds)s")) }
