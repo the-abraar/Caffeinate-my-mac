@@ -46,15 +46,16 @@ struct CaffeinateWidgetView: View {
             HStack {
                 Image(systemName: entry.end != nil ? "cup.and.saucer.fill" : "cup.and.saucer")
                     .foregroundStyle(entry.end != nil ? .orange : .secondary)
+                    .accessibilityHidden(true)
                 Text(entry.end != nil ? "AWAKE" : "IDLE")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(entry.end != nil ? .green : .secondary)
                 Spacer()
                 if entry.lid {
-                    Image(systemName: "laptopcomputer").foregroundStyle(.orange)
+                    Image(systemName: "laptopcomputer").foregroundStyle(.orange).accessibilityLabel("Lid mode")
                 }
                 if entry.shutdown {
-                    Image(systemName: "power").foregroundStyle(.red)
+                    Image(systemName: "power").foregroundStyle(.red).accessibilityLabel("Shuts down when finished")
                 }
             }
             if let start = entry.start, let end = entry.end {

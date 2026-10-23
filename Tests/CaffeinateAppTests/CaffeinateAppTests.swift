@@ -382,7 +382,16 @@ final class LogicTests: XCTestCase {
         let start = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 8, minute: 12))!
         let r = SessionRecord(start: start, minutes: 31, lid: true, batteryUsed: 9, peakThermal: 1,
                               offlineSeconds: 75, reason: "Agents idle")
-        XCTAssertEqual(r.line, "15 Oct 08:12 · 31m · lid · −9% · warm · offline 1m · Agents idle")
+        // The date follows the user's locale (12 or 24 hour clock), so only the rest is fixed.
+        XCTAssertEqual(r.line, SessionRecord.clock.string(from: start) + " · 31m · lid · −9% · warm · offline 1m · Agents idle")
+        let gb = DateFormatter()
+        gb.locale = Locale(identifier: "en_GB")
+        gb.setLocalizedDateFormatFromTemplate("dMMMjmm")
+        let us = DateFormatter()
+        us.locale = Locale(identifier: "en_US")
+        us.setLocalizedDateFormatFromTemplate("dMMMjmm")
+        XCTAssertTrue(gb.string(from: start).contains("08:12"), gb.string(from: start))
+        XCTAssertTrue(us.string(from: start).contains("8:12") && us.string(from: start).hasSuffix("AM"), us.string(from: start))
     }
 }
 

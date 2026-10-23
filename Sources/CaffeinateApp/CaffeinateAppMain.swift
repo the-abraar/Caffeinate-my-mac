@@ -54,5 +54,15 @@ struct MenuBarLabel: View {
                     .monospacedDigit()
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        guard manager.isActive else { return "Caffeinate, idle" }
+        var parts = ["Caffeinate, awake", "\(manager.remainingText) left"]
+        if manager.lidMode { parts.append("lid can close") }
+        if manager.lidMode, let b = manager.battery { parts.append("battery \(b.percent)%") }
+        return parts.joined(separator: ", ")
     }
 }

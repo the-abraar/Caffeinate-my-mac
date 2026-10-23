@@ -22,9 +22,9 @@ struct SessionRecord: Codable, Equatable, Identifiable {
         return parts.joined(separator: " · ")
     }
 
-    private static let clock: DateFormatter = {
+    static let clock: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "d MMM HH:mm"
+        f.setLocalizedDateFormatFromTemplate("dMMMjmm")  // j: the locale's 12 or 24 hour clock
         return f
     }()
 }

@@ -113,6 +113,7 @@ struct ContentView: View {
             Image(systemName: manager.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
                 .font(.title2)
                 .foregroundStyle(manager.isActive ? .orange : .secondary)
+                .accessibilityHidden(true)  // the AWAKE/IDLE text below says it
             Text("Caffeinate")
                 .font(.title3.bold())
             Spacer()
@@ -146,6 +147,7 @@ struct ContentView: View {
             Text(manager.isActive ? manager.remainingText : "--:--")
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .monospacedDigit()
+                .accessibilityLabel(manager.isActive ? "\(manager.remainingText) left" : "No session")
 
             if manager.isActive {
                 ProgressView(value: manager.progress)
@@ -326,7 +328,8 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if manager.screenLockImmediate == false {
-                    Text("⚠️ Set Lock Screen → “Require password after screen saver begins or display is turned off” to Immediately, so an opened lid shows the lock screen.")
+                    Label("Set Lock Screen → “Require password after screen saver begins or display is turned off” to Immediately, so an opened lid shows the lock screen.",
+                          systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -334,7 +337,8 @@ struct ContentView: View {
 
                 Toggle("Keep display awake", isOn: $manager.keepDisplayAwake)
                     .toggleStyle(.switch)
-                Text(manager.keepDisplayAwake ? "⚠️ Display won't sleep; screen will remain awake without locking." : "Display sleeps normally; screen locks safely while Mac stays awake.")
+                Label(manager.keepDisplayAwake ? "Display won't sleep; screen will remain awake without locking." : "Display sleeps normally; screen locks safely while Mac stays awake.",
+                      systemImage: manager.keepDisplayAwake ? "exclamationmark.triangle.fill" : "lock.display")
                     .font(.caption2)
                     .foregroundStyle(manager.keepDisplayAwake ? .orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
