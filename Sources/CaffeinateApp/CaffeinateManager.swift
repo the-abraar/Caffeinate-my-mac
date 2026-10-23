@@ -11,7 +11,6 @@ final class CaffeinateManager: ObservableObject {
     static let commuteSeconds = 45 * 60
     static let lidCap = 2 * 3600       // a lid-closed session never runs longer, whatever ends it
     static let idleCap = 12 * 3600     // cap for agent/process sessions without lid mode
-    static let agentIdleLimit: TimeInterval = 5 * 60
     static let batteryFloor = 15
 
     @Published var isActive: Bool = false
@@ -41,13 +40,17 @@ final class CaffeinateManager: ObservableObject {
     @Published var shutdownCountdown: Int? = nil
     private var shutdownTimer: Timer?
     private var shutdownHold: Process?
+    /// "Until agents idle" ends this many minutes after the last sign of work (1-60, default 5).
+    @Published var agentIdleMinutes = UserDefaults.standard.object(forKey: "agentIdleMinutes") as? Int ?? 5 {
+        didSet { UserDefaults.standard.set(agentIdleMinutes, forKey: "agentIdleMinutes") }
+    }
     @Published var ntfyTopic = UserDefaults.standard.string(forKey: "ntfyTopic") ?? "" {
         didSet { UserDefaults.standard.set(ntfyTopic, forKey: "ntfyTopic") }
     }
 
     private var process: Process?
     private var timer: Timer?
-    private var startDate = Date()
+    var startDate = Date()  // internal for tests
     /// Start of the current run of back-to-back lid sessions. Sleep stays disabled across them,
     /// so the 2 h cap counts from here. Internal for tests.
     var lidStart = Date()
@@ -440,7 +443,7 @@ final class CaffeinateManager: ObservableObject {
             lidWasClosed = closed
         }
         if ending == .agentsIdle,
-           Date().timeIntervalSince(max(startDate, agents.lastActivity ?? startDate)) > Self.agentIdleLimit {
+           Date().timeIntervalSince(max(startDate, agents.lastActivity ?? startDate)) > TimeInterval(agentIdleMinutes * 60) {
             finish("Agents idle", notify: true)
             return
         }

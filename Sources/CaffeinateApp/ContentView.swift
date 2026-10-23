@@ -232,7 +232,11 @@ struct ContentView: View {
             case .time:
                 DatePicker("Until", selection: $untilTime, displayedComponents: .hourAndMinute)
             case .agents:
-                Text("Ends 5 min after Claude Code and Codex stop working. Stops after 2 h with the lid closed, 12 h otherwise.")
+                Stepper(value: $manager.agentIdleMinutes, in: 1...60) {
+                    Text("Idle for \(manager.agentIdleMinutes) min")
+                        .monospacedDigit()
+                }
+                Text("Ends \(manager.agentIdleMinutes) min after Claude Code and Codex stop working. Stops after 2 h with the lid closed, 12 h otherwise.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

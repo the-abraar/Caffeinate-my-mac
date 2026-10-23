@@ -426,6 +426,7 @@ final class CaffeinateManagerTests: XCTestCase {
 
     override func tearDown() {
         manager.stop()  // also stops the real /usr/bin/caffeinate child
+        UserDefaults.standard.removeObject(forKey: "agentIdleMinutes")
         try? FileManager.default.removeItem(at: dir)
     }
 
@@ -537,5 +538,18 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertEqual(manager.history.first?.peakThermal, 2)
         manager.commute()
         XCTAssertEqual(state?["refusalReason"] as? String, "Mac is too hot for lid mode")
+    }
+
+    /// Phase 2: "until agents idle" ends after the configured idle minutes, not before.
+    func testAgentSessionEndsAfterTheIdleSetting() {
+        manager.agentIdleMinutes = 10
+        manager.start(seconds: 0, ending: .agentsIdle)
+        manager.startDate = Date().addingTimeInterval(-6 * 60)  // no agent activity for 6 min
+        manager.tick()
+        XCTAssertTrue(manager.isActive)
+        manager.agentIdleMinutes = 5
+        manager.tick()
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(manager.history.first?.reason, "Agents idle")
     }
 }

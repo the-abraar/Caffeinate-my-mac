@@ -30,7 +30,7 @@ app has an icon. Those changes arrive in the next release. Build from source to 
   display. Made for agents that keep working while you commute.
 - **Commute**: one click for 45 minutes with the lid closed.
 - **Until agents finish**: stays awake while Claude Code or Codex is working, and ends
-  5 minutes after they go idle.
+  5 minutes (you can change this) after they go idle.
 - **Until an app quits**: stays awake while a chosen app or process is running.
 - **iPhone hotspot aware**: optionally turns on lid mode by itself when you join your
   iPhone's hotspot while agents are working.
@@ -143,7 +143,8 @@ The session counts agents as working while either of these is true:
 - a `claude` or `codex` process and everything it started use more than 5% CPU. This covers
   long builds and test runs that write nothing until they finish.
 
-The session ends 5 minutes after the last sign of work. The countdown shows its hard cap:
+The session ends 5 minutes after the last sign of work. Change the wait (1 to 60 minutes) with
+the stepper under **When agents go idle**. The countdown shows its hard cap:
 2 hours with the lid closed, 12 hours otherwise.
 
 ### iPhone hotspot
