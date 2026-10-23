@@ -192,3 +192,11 @@ Fixed in code on `main`, with tests where the logic changed (`swift test`: 36 pa
 - B5: let a lid session run below 10% with the app stopped (`kill -STOP`), and check that the failsafe restores.
 - B10: start a 5-minute non-lid timer, sleep the Mac for 10 minutes, wake it, and check that the session ends within a second.
 - B12: check that the lock on lid close still fires about 1 s after closing, with the popover closed.
+
+## Status (2026-10-24, open items from Phases 1-4)
+
+`swift test` and `./build.sh` pass after each change below. Nothing here has run with the lid closed.
+
+**Phase 1:**
+- The menu bar shows a laptop icon next to the countdown and battery % during a lid session (the spec asked for it; only the battery % was there).
+- Acceptance test 5 now has its debug hook. During a lid session, run `defaults write com.abraar.caffeinateapp debugBatteryPercent -int 14` (fakes 14% on battery) or `defaults write com.abraar.caffeinateapp debugThermal -int 2` (fakes `.serious`). Within 30 s the session stops and restores sleep. Check `pmset -g | grep SleepDisabled`, then `defaults delete com.abraar.caffeinateapp debugBatteryPercent` (or `debugThermal`): while a key is set, lid mode refuses to start. The thermal reading now goes through `PowerControl`, so both stops have unit tests.

@@ -44,6 +44,9 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: manager.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
+            if manager.isActive && manager.lidMode {
+                Image(systemName: "laptopcomputer")
+            }
             if manager.isActive {
                 Text(manager.lidMode && manager.battery != nil
                      ? "\(manager.remainingText) · \(manager.battery?.percent ?? 0)%"

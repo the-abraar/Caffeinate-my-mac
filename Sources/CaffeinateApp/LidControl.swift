@@ -296,6 +296,7 @@ protocol PowerControl {
     func upkeep(force: Bool, until: Date)
     func battery() -> PowerInfo.Battery?
     func isLidClosed() -> Bool
+    func thermalState() -> Int  // ProcessInfo.ThermalState raw value
 }
 
 struct SystemPower: PowerControl {
@@ -303,6 +304,18 @@ struct SystemPower: PowerControl {
     func begin(until: Date) -> Bool { LidControl.begin(until: until) }
     func end() -> Bool { LidControl.end() }
     func upkeep(force: Bool, until: Date) { LidControl.upkeep(force: force, until: until) }
-    func battery() -> PowerInfo.Battery? { PowerInfo.battery() }
     func isLidClosed() -> Bool { PowerInfo.isLidClosed() }
+
+    // Debug hook for acceptance test 5 (fake a battery-floor or heat stop on real hardware):
+    //   defaults write com.abraar.caffeinateapp debugBatteryPercent -int 14   (on battery at 14%)
+    //   defaults write com.abraar.caffeinateapp debugThermal -int 2           (.serious)
+    // The app reads them every 30 s. Undo with `defaults delete com.abraar.caffeinateapp <key>`.
+    func battery() -> PowerInfo.Battery? {
+        let fake = UserDefaults.standard.integer(forKey: "debugBatteryPercent")
+        return fake > 0 ? .init(percent: fake, onBattery: true, minutesLeft: nil) : PowerInfo.battery()
+    }
+
+    func thermalState() -> Int {
+        max(ProcessInfo.processInfo.thermalState.rawValue, UserDefaults.standard.integer(forKey: "debugThermal"))
+    }
 }

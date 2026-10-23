@@ -182,7 +182,7 @@ final class CaffeinateManager: ObservableObject {
         lidMode = lid
         self.ending = ending
         batteryAtStart = power.battery()?.percent
-        peakThermal = ProcessInfo.processInfo.thermalState.rawValue
+        peakThermal = power.thermalState()
         offlineSeconds = 0
         offlineSince = network.isOnline ? nil : Date()
         lidWasClosed = power.isLidClosed()
@@ -252,7 +252,7 @@ final class CaffeinateManager: ObservableObject {
         // A URL that cold-launches the app arrives before refreshSetup's async check returns.
         if !lidReady { lidReady = power.isReady() }
         if !lidReady { return "Set up lid mode first (Settings)" }
-        if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+        if power.thermalState() >= ProcessInfo.ThermalState.serious.rawValue {
             return "Mac is too hot for lid mode"
         }
         if let b = power.battery(), b.onBattery, b.percent <= Self.batteryFloor {
@@ -447,6 +447,7 @@ final class CaffeinateManager: ObservableObject {
         ticks += 1
         if ticks % 30 == 0 {
             powerChanged()
+            if isActive { thermalChanged() }  // the notification covers real changes; this polls the debug hook
             agentsWorking = agents.isWorking
             // On the main thread on purpose: it must never race finish()'s restore.
             if lidMode { power.upkeep(force: false, until: lidDeadline.addingTimeInterval(120)) }
@@ -467,9 +468,9 @@ final class CaffeinateManager: ObservableObject {
     }
 
     private func thermalChanged() {
-        let state = ProcessInfo.processInfo.thermalState
-        peakThermal = max(peakThermal, state.rawValue)
-        if lidMode, state.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+        let state = power.thermalState()
+        peakThermal = max(peakThermal, state)
+        if lidMode, state >= ProcessInfo.ThermalState.serious.rawValue {
             finish("Stopped: Mac got too hot", notify: true)
         }
     }

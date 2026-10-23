@@ -392,6 +392,7 @@ final class FakePower: PowerControl {
     var beginOK = true
     var endOK = true
     var batteryReading: PowerInfo.Battery? = .init(percent: 80, onBattery: false, minutesLeft: nil)
+    var thermal = 0
     private(set) var calls: [String] = []
 
     func isReady() -> Bool { calls.append("isReady"); return ready }
@@ -400,6 +401,7 @@ final class FakePower: PowerControl {
     func upkeep(force: Bool, until: Date) { calls.append("upkeep") }
     func battery() -> PowerInfo.Battery? { batteryReading }
     func isLidClosed() -> Bool { false }  // never true: a closed lid would run pmset sleepnow / displaysleepnow
+    func thermalState() -> Int { thermal }
 }
 
 final class CaffeinateManagerTests: XCTestCase {
@@ -502,5 +504,29 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertEqual(state?["refused"] as? Bool, true)
         XCTAssertEqual(state?["refusalReason"] as? String, "Set up lid mode first (Settings)")
         XCTAssertFalse(power.calls.contains("begin"))
+    }
+
+    /// Acceptance test 5 in code: the safety stops end a lid session and restore sleep.
+    func testBatteryFloorStopsALidSession() {
+        manager.lidReady = true
+        manager.commute()
+        power.batteryReading = .init(percent: 15, onBattery: true, minutesLeft: 40)
+        for _ in 0..<30 { manager.tick() }  // the 30 s poll
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(power.calls, ["begin", "end"])
+        XCTAssertEqual(manager.history.first?.reason, "Stopped: battery at 15%")
+    }
+
+    func testHeatStopsALidSession() {
+        manager.lidReady = true
+        manager.commute()
+        power.thermal = ProcessInfo.ThermalState.serious.rawValue
+        for _ in 0..<30 { manager.tick() }
+        XCTAssertFalse(manager.isActive)
+        XCTAssertEqual(power.calls, ["begin", "end"])
+        XCTAssertEqual(manager.history.first?.reason, "Stopped: Mac got too hot")
+        XCTAssertEqual(manager.history.first?.peakThermal, 2)
+        manager.commute()
+        XCTAssertEqual(state?["refusalReason"] as? String, "Mac is too hot for lid mode")
     }
 }
