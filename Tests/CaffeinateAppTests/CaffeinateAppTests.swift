@@ -552,4 +552,14 @@ final class CaffeinateManagerTests: XCTestCase {
         XCTAssertFalse(manager.isActive)
         XCTAssertEqual(manager.history.first?.reason, "Agents idle")
     }
+
+    /// Phase 3: each dropout shows in the session summary with its time.
+    func testOfflineText() {
+        let t0 = Date(timeIntervalSince1970: 0)
+        let time: (Date) -> String = { "T\(Int($0.timeIntervalSince1970))" }
+        XCTAssertNil(CaffeinateManager.offlineText([], time: time))
+        XCTAssertNil(CaffeinateManager.offlineText([(t0, 0)], time: time))
+        XCTAssertEqual(CaffeinateManager.offlineText([(t0, 130), (t0.addingTimeInterval(500), 30), (t0, 120)], time: time),
+                       "offline 2m10s at T0, 30s at T500, 2m at T0")
+    }
 }

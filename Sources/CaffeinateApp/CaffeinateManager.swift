@@ -57,7 +57,7 @@ final class CaffeinateManager: ObservableObject {
     var endDate: Date?  // internal for tests
     private var batteryAtStart: Int?
     private var peakThermal = 0
-    private var offlineSeconds: TimeInterval = 0
+    private var offline: [(start: Date, seconds: Int)] = []  // each dropout, for the summary
     private var offlineSince: Date?
     private var lidWasClosed = false
     private var ticks = 0
@@ -186,7 +186,7 @@ final class CaffeinateManager: ObservableObject {
         self.ending = ending
         batteryAtStart = power.battery()?.percent
         peakThermal = power.thermalState()
-        offlineSeconds = 0
+        offline = []
         offlineSince = network.isOnline ? nil : Date()
         lidWasClosed = power.isLidClosed()
         ticks = 0
@@ -375,11 +375,9 @@ final class CaffeinateManager: ObservableObject {
             }
             if power.isLidClosed() { scheduleSleepCheck() }
         }
-        if let since = offlineSince {
-            offlineSeconds += Date().timeIntervalSince(since)
-            offlineSince = nil
-        }
+        backOnline()
         if let reason { record(reason) }
+        if let text = Self.offlineText(offline) { summary = summary.map { "\($0) · \(text)" } }
 
         isActive = false
         lidMode = false
@@ -410,7 +408,7 @@ final class CaffeinateManager: ObservableObject {
         let used = batteryAtStart.flatMap { start in power.battery().map { start - $0.percent } }
         let r = SessionRecord(
             start: startDate, minutes: Int(Date().timeIntervalSince(startDate) / 60), lid: lidMode,
-            batteryUsed: used, peakThermal: peakThermal, offlineSeconds: Int(offlineSeconds), reason: reason)
+            batteryUsed: used, peakThermal: peakThermal, offlineSeconds: offline.reduce(0) { $0 + $1.seconds }, reason: reason)
         history = Array(([r] + history).prefix(SessionHistory.limit))
         SessionHistory.save(history, to: historyURL)
     }
@@ -491,13 +489,24 @@ final class CaffeinateManager: ObservableObject {
         if onHotspot && !wasOnHotspot { armedThisConnection = false }
         if isActive {
             if !network.isOnline, offlineSince == nil { offlineSince = Date() }
-            if network.isOnline, let since = offlineSince {
-                offlineSeconds += Date().timeIntervalSince(since)
-                offlineSince = nil
-            }
+            if network.isOnline { backOnline() }
         }
         updateAgentWatching()
         maybeAutoCommute()
+    }
+
+    private func backOnline() {
+        guard let since = offlineSince else { return }
+        offline.append((since, Int(Date().timeIntervalSince(since).rounded())))
+        offlineSince = nil
+    }
+
+    /// "offline 2m10s at 08:42, 30s at 08:50": explains an agent run that failed mid-commute.
+    static func offlineText(_ intervals: [(start: Date, seconds: Int)],
+                            time: (Date) -> String = { timeFormatter.string(from: $0) }) -> String? {
+        func duration(_ s: Int) -> String { s < 60 ? "\(s)s" : s % 60 == 0 ? "\(s / 60)m" : "\(s / 60)m\(s % 60)s" }
+        let parts = intervals.filter { $0.seconds > 0 }.map { "\(duration($0.seconds)) at \(time($0.start))" }
+        return parts.isEmpty ? nil : "offline " + parts.joined(separator: ", ")
     }
 
     /// Opt-in: on the hotspot with agents working, start lid mode while the lid is still open.

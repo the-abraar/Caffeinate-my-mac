@@ -203,3 +203,9 @@ Fixed in code on `main`, with tests where the logic changed (`swift test`: 36 pa
 - From the 2026-10-19 next steps (step 6, the agent part): the menu bar item, the countdown, and the widget's icon-only lid and shutdown badges have accessibility labels. History dates follow the locale's 12 or 24 hour clock. The two ⚠️ warnings in Settings use an SF Symbol like the rest.
 
 **Phase 2:** transcript FSEvents on every `~/.claude*/projects` plus `~/.codex/sessions`, the 15 s `ps` CPU-tree check, the 2 h cap, ntfy and local notifications were already in place. The one gap was "after N minutes idle (default 5)": N was fixed at 5. It's now a stepper (1-60 min) under *When agents go idle*, kept in `UserDefaults` (`agentIdleMinutes`), with a test. Still as before: B11 (npm Claude runs as `node`, so its CPU isn't counted) and config dirs created after a session starts aren't watched until the next session.
+
+**Phase 3:** hotspot detection (`NWPathMonitor`, expensive or gateway `172.20.10.1`) and the opt-in auto-arm were already in place. Two gaps closed:
+- The offline log recorded only a total. Each dropout is now kept, and the session summary and its notification say "offline 2m10s at 08:42, 30s at 08:50". The history line still shows the total. Tested.
+- README tips: added that the hotspot stays on while the Mac stays connected, and that `tcpkeepalive` is already 1 (checked on this Mac).
+
+Still for the owner: the auto-arm on a real iPhone hotspot (from the 2026-10-15 list).

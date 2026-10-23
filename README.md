@@ -157,8 +157,13 @@ go idle. This happens once per hotspot connection, and **before** you close the 
 the lid without it would put the Mac to sleep immediately. The session history records how
 long you were offline, which helps explain an agent run that failed.
 
-Tip: a USB cable to the iPhone is a steadier connection than Wi-Fi, but the Mac charges the
-phone from its own battery.
+When a session ends after a dropout, its summary and notification say when and for how long, for
+example "offline 2m10s at 08:42".
+
+Tips: a USB cable to the iPhone is a steadier connection than Wi-Fi, but the Mac charges the
+phone from its own battery. The iPhone keeps the hotspot on as long as the Mac stays connected
+to it. macOS keeps TCP keepalive on during sleep by default (`pmset -g | grep tcpkeepalive`
+reads 1).
 
 ### Phone alerts
 
