@@ -12,11 +12,19 @@ until your AI agents finish, with the lid closed in your bag.
 ![arch](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-green)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
-### [⬇️ Download Caffeinate.zip](https://github.com/the-abraar/Caffeinate-my-mac/releases/latest/download/Caffeinate.zip)
+> **Personal tool, not a supported product.** I built this for my own Mac and share the
+> source as is, under the MIT license. There is no support, no roadmap, no update channel and
+> no promise that issues or pull requests get answered. To use it, build it from source
+> (below). It needs no Apple Developer account.
 
-The download is still v1.1.0 (2026-10-15). This README describes `main`: the display may
-sleep by default, auto shutdown has a 60-second countdown, the CLI has exit codes, and the
-app has an icon. Those changes arrive in the next release. Build from source to get them now.
+> ⚠️ **Don't use the old v1.1.0 download** on the Releases page. Its lid-mode setup writes
+> the sudoers rule to a user-writable temporary file, checks it with `visudo`, then installs
+> it as root. Another process running as you could swap the file between the check and the
+> install and get any sudoers rule it wants, which means root without a password. `main`
+> fixed this by staging the rule root-owned in `/etc/sudoers.d/`. That zip is also unsigned,
+> unnotarized and rejected by Gatekeeper, and it lacks every fix since 2026-10-15. If you
+> installed it and ran **Set Up…**, remove the rule (see *To remove it* below) and build
+> from source instead.
 
 ---
 
@@ -48,20 +56,20 @@ app has an icon. Those changes arrive in the next release. Build from source to 
 - **Lightweight**: it runs Apple's built-in `caffeinate` tool and `pmset`. Once a session
   ends, only the lid-mode failsafe check runs (every 30 seconds, and only after lid setup).
 
-## Install (1 minute)
+## Install (build from source)
 
-1. **[Download Caffeinate.zip](https://github.com/the-abraar/Caffeinate-my-mac/releases/latest/download/Caffeinate.zip)**
-   and double-click it to unzip.
-2. Drag **Caffeinate.app** into your **Applications** folder.
-3. Open it. The app isn't notarized by Apple, so the first launch shows a warning
-   that Apple can't verify it. To allow it:
-   - Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**
-     next to the Caffeinate message, **or**
-   - run this once in Terminal:
-     ```bash
-     xattr -dr com.apple.quarantine /Applications/Caffeinate.app
-     ```
-4. A ☕ appears in your menu bar. You're done.
+Requires macOS 13+ and Xcode (Swift 5.9+).
+
+```bash
+git clone https://github.com/the-abraar/Caffeinate-my-mac.git
+cd Caffeinate-my-mac
+./build.sh --install  # builds a universal, ad-hoc signed Caffeinate.app into /Applications
+open /Applications/Caffeinate.app
+```
+
+A ☕ appears in your menu bar. A build made on your own Mac carries no quarantine flag, so
+Gatekeeper doesn't block it. If `/Applications` isn't writable, `build.sh` installs to
+`~/Applications` instead.
 
 **Start it at login (recommended for daily use):** ☕ → Settings → **Launch at login**.
 
