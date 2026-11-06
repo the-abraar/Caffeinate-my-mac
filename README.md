@@ -13,8 +13,9 @@ until your AI agents finish, with the lid closed in your bag.
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 > **Personal tool, not a supported product.** I built this for my own Mac and share the
-> source as is, under the MIT license. There is no support, no roadmap, no update channel and
-> no promise that issues or pull requests get answered. To use it, build it from source
+> source under the MIT license. There is no support or update channel, but contributions are
+> welcome: pick an issue labelled `good first issue` or `help wanted` and see
+> [CONTRIBUTING.md](CONTRIBUTING.md). Reviews are best effort. To use it, build it from source
 > (below). It needs no Apple Developer account.
 
 > ⚠️ **Don't use the old v1.1.0 download** on the Releases page. Its lid-mode setup writes
