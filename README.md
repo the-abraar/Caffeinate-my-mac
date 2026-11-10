@@ -18,13 +18,12 @@ until your AI agents finish, with the lid closed in your bag.
 > [CONTRIBUTING.md](CONTRIBUTING.md). Reviews are best effort. To use it, build it from source
 > (below). It needs no Apple Developer account.
 
-> ⚠️ **Don't use the old v1.1.0 download** on the Releases page. Its lid-mode setup writes
-> the sudoers rule to a user-writable temporary file, checks it with `visudo`, then installs
-> it as root. Another process running as you could swap the file between the check and the
-> install and get any sudoers rule it wants, which means root without a password. `main`
-> fixed this by staging the rule root-owned in `/etc/sudoers.d/`. That zip is also unsigned,
-> unnotarized and rejected by Gatekeeper, and it lacks every fix since 2026-10-15. If you
-> installed it and ran **Set Up…**, remove the rule (see *To remove it* below) and build
+> ⚠️ **The v1.0.0 and v1.1.0 downloads were removed on 2026-11-10.** The v1.1.0 lid-mode
+> setup wrote the sudoers rule to a user-writable temporary file, checked it with `visudo`,
+> then installed it as root. Another process running as you could swap the file between the
+> check and the install and get any sudoers rule it wanted, which means root without a
+> password. `main` fixed this by staging the rule root-owned in `/etc/sudoers.d/`. If you
+> installed v1.1.0 and ran **Set Up…**, remove the rule (see *To remove it* below) and build
 > from source instead.
 
 ---
@@ -200,7 +199,7 @@ caffeinate-my-mac status --json
 Exit codes: `0` ok, `1` the app refused (for example, the lid setup is missing), `2` bad input,
 `3` no answer from the app within 10 seconds, or macOS can't find the app at all. `extend` and
 `off` don't wait for an answer. `status` exits `1` when Caffeinate isn't running, even if the
-last state file still shows a session (after a crash). (The v1.1.0 download's CLI always exits `0`.)
+last state file still shows a session (after a crash). (The removed v1.1.0 download's CLI always exited `0`.)
 
 The CLI opens `caffeinate-my-mac://` URLs, which you can also use from Shortcuts (**Open
 URLs**) or Raycast: `start?minutes=45&lid=1`, `start?until=09:30`, `commute`, `idle?lid=1`,
